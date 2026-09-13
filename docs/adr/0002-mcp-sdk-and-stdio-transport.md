@@ -9,11 +9,13 @@ Phase 0 must expose 5 tools (`remember`, `recall`, `update`, `forget`, `search`)
 
 ## Decision
 
-Use the official `mcp` PyPI package's `FastMCP` high-level API, registering the 5 tools as decorated functions. Serve over **stdio** transport only.
+Use the official `mcp` PyPI package's high-level server class, registering the 5 tools as decorated functions. Serve over **stdio** transport only.
+
+**Implementation note (discovered when actually running `uv add mcp`):** the latest `mcp` release at implementation time is `2.2.0`, which renamed `mcp.server.fastmcp.FastMCP` to `mcp.server.mcpserver.MCPServer` (importing the old path raises a `ModuleNotFoundError` with a migration pointer). The API is otherwise the same shape this ADR was written for — a `.tool()` decorator for registering functions and `.run(transport="stdio")` (stdio is the default) to serve. This is exactly the kind of version-specific detail this ADR originally flagged as "must be pinned by checking current PyPI availability, not guessed in advance" — the guess (`FastMCP`) turned out to be the pre-2.x name, confirmed and corrected against the real installed package rather than left wrong in the docs.
 
 ## Rationale
 
-**FastMCP vs. low-level `Server`:** 5 simple, independent tools with straightforward pydantic-validated I/O is exactly FastMCP's design target — the low-level `Server` class exists for cases needing custom protocol-level behavior (streaming, custom capabilities negotiation) that Phase 0 does not need. Using the low-level API here would be unjustified complexity.
+**High-level `MCPServer` vs. low-level `Server`:** 5 simple, independent tools with straightforward pydantic-validated I/O is exactly this API's design target — the low-level `Server` class exists for cases needing custom protocol-level behavior (streaming, custom capabilities negotiation) that Phase 0 does not need. Using the low-level API here would be unjustified complexity.
 
 **stdio vs. SSE/HTTP:** Both Claude Code and Cursor launch local MCP servers as child processes communicating over stdio by default — this is exactly the mechanism the manual validation checklist needs (launch client → client spawns server subprocess → tool calls flow over stdio). SSE/HTTP transport would require standing up a web server, managing a port, and adding authentication for zero Phase 0 benefit (no remote client exists yet); that surface area belongs to Phase 6 (Ecosystem Integration), where a transparent-proxy mode and multi-client access are actual requirements.
 

@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  lint-and-unit:
+    name: Lint, type-check, unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+      - name: ruff
+        run: uv run ruff check .
+      - name: mypy --strict
+        run: uv run mypy --strict src/ tests/
+      - name: Unit tests (no Docker)
+        run: uv run pytest tests/unit -v
+
+  integration:
+    name: Integration tests (Postgres + Redis)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.0-pg16
+        env:
+          POSTGRES_USER: rootmem
+          POSTGRES_PASSWORD: rootmem_dev_password
+          POSTGRES_DB: rootmem
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rootmem -d rootmem"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: rootmem
+      POSTGRES_PASSWORD: rootmem_dev_password
+      POSTGRES_DB: rootmem
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+      - name: Run migrations
+        run: uv run python scripts/migrate.py
+      - name: Integration tests
+        run: uv run pytest -m integration -v

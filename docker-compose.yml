@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.0-pg16
+    container_name: rootmem-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rootmem}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rootmem_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-rootmem}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - rootmem_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rootmem} -d ${POSTGRES_DB:-rootmem}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: rootmem-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - rootmem_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  rootmem_postgres_data:
+  rootmem_redis_data:

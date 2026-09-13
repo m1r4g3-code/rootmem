@@ -17,6 +17,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "asyncpg-stubs>=0.31.3",
     "mypy>=1.13",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
@@ -31,6 +32,7 @@ strict = true
 files = ["src"]
 mypy_path = "src"
 explicit_package_bases = true
+plugins = ["pydantic.mypy"]
 
 [tool.ruff]
 line-length = 100
