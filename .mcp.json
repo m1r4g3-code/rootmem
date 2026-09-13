@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "rootmem": {
+      "type": "stdio",
+      "command": "C:\\Users\\HomePC\\Documents\\Continuum\\.venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "rootmem.integration.mcp.server"
+      ],
+      "env": {}
+    }
+  }
+}
