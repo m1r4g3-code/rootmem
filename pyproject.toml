@@ -1,0 +1,48 @@
+[project]
+name = "rootmem"
+version = "0.1.0"
+description = "ROOTMEM — human-brain-inspired, MCP-native agent memory system (Phase 0: Foundations)"
+requires-python = ">=3.13"
+dependencies = [
+    "asyncpg>=0.30",
+    "mcp>=1.0",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "redis>=5.2",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.13,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+    "yoyo-migrations>=9.0",
+]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+files = ["src"]
+mypy_path = "src"
+explicit_package_bases = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: requires Docker (Postgres + Redis) to be running",
+]
