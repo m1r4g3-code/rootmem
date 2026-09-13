@@ -6,13 +6,24 @@ sessions via MCP") is a manual, human-observed outcome, not something a unit
 test alone can certify. Run each step, record the actual result (not just a
 checkmark) with a timestamp, in this file, then commit it before tagging.
 
-**Status: NOT YET RUN** — blocked on local Docker Desktop, see note at the
-bottom of this file.
+**Status: NOT YET RUN** (this checklist specifically — see the native-Postgres
+note below for what *has* been verified automatically).
 
 ## Prerequisites
 
+**Docker path** (once Docker Desktop is fixed — see note at the bottom):
 1. `docker compose up -d`
 2. `uv run python scripts/migrate.py`
+
+**Native path** (current setup on this machine — see note at the bottom):
+1. Postgres 17 running as a standalone instance (`pg_ctl -D
+   C:\Users\HomePC\rootmem_pgdata_parent\data start`, port 5439) and Redis
+   running as the Windows `Redis` service (port 6379) — both already up.
+2. `.env` already points at them (gitignored, not committed).
+3. `uv run python scripts/migrate.py` (already applied).
+
+Either way, then:
+
 3. Configure Claude Code's MCP settings (or Cursor's) to launch:
    ```
    command: <path to uv or python>
@@ -47,9 +58,14 @@ bottom of this file.
 
 - [ ] **`forget` + soft-delete verification**: Ask the agent to forget the
       fact. Confirm recall no longer returns it. Then, independently of the
-      agent, run:
+      agent, run (Docker path):
       ```
       docker compose exec postgres psql -U rootmem -d rootmem -c \
+        "SELECT id, deleted_at, deleted_reason FROM memories WHERE id = '<id>';"
+      ```
+      or (native path):
+      ```
+      "C:\Program Files\PostgreSQL\17\bin\psql.exe" -h localhost -p 5439 -U rootmem -d rootmem -c \
         "SELECT id, deleted_at, deleted_reason FROM memories WHERE id = '<id>';"
       ```
       and confirm the row still physically exists with `deleted_at` set —
@@ -63,15 +79,50 @@ and actual observed output, not just pass/fail.)_
 
 ---
 
-## Blocker note (2026-09-13)
+## Blocker note (2026-09-13, updated same day)
 
-Docker Desktop's engine will not start on this machine — `docker info`
-fails with `failed to connect to the docker API at
-npipe:////./pipe/dockerDesktopLinuxEngine`, and `wsl --status` reports
-"Windows Subsystem for Linux has no installed distributions," which means
-Docker Desktop's WSL2 backend distros (`docker-desktop`,
-`docker-desktop-data`) were never registered. Fixing this requires an
-elevated (Administrator) session to verify/enable the WSL2 and Virtual
-Machine Platform Windows features and likely a restart — outside what an
-unprivileged shell can do. This checklist cannot be executed, and
-`v0.0.1-phase0` cannot be tagged, until that's resolved.
+Docker Desktop's engine will not start on this machine — `docker info` hangs
+indefinitely, and Docker Desktop itself reported `Wsl/Service/RegisterDistro/
+CreateVm/0x800705b4` (a WSL2 VM-creation timeout) when the user tried
+relaunching it. This is a physical Dell Latitude E7450 (not a VM — nested
+virtualization isn't the cause) that shows a hypervisor as already active,
+so the likely causes are BIOS-level virtualization settings, corporate
+IT/endpoint-security restrictions, low disk space, or a conflicting
+hypervisor — any of which needs BIOS access or IT involvement to resolve,
+which is outside what this session can do.
+
+**Workaround in place**: to keep Phase 0 moving, Postgres 17 and Redis are
+running natively on this machine instead of via docker-compose —
+- Postgres: a standalone instance (not the Windows service, whose password
+  is unknown) initialized via `initdb` under
+  `C:\Users\HomePC\rootmem_pgdata_parent\data`, started with `pg_ctl ... -o
+  "-p 5439" start`, user `rootmem` / password `rootmem_dev_password`.
+- Redis: the `Redis` Windows service (winget package `Redis.Redis`,
+  version 3.0.504 — the old Microsoft port), port 6379. `redis-py`'s client
+  is pinned to `protocol=2` (RESP2) since this pre-6.0 server doesn't
+  support the `HELLO` command redis-py tries by default.
+- pgvector isn't installed natively (no simple Windows binary) —
+  `0001_init.sql` degrades gracefully and skips the extension/column when
+  unavailable (see the migration's own comments); this doesn't affect
+  Phase 0 since nothing populates or queries `content_embedding` yet.
+- `.env` (gitignored) points at the native ports instead of docker-compose's
+  defaults.
+
+**Result**: all 23 integration tests (Postgres roundtrip incl. direct
+soft-delete inspection, Redis ping, and 4 real end-to-end tests that launch
+the actual MCP server as a subprocess over stdio and drive it through the
+real `mcp` client protocol) pass against this native setup, alongside all
+31 unit tests — 54/54 green. Two real bugs were caught and fixed in the
+process: `confidence` was declared `REAL` (32-bit float), which silently
+corrupted values like 0.9 on round-trip — fixed to `DOUBLE PRECISION`; and
+a syntactically-invalid id string crashed as a `StorageError` instead of
+behaving as "not found" like the in-memory fake does — fixed by validating
+UUID shape before querying.
+
+**What's still genuinely unverified**: this checklist's actual point — a
+real Claude Code or Cursor session remembering a fact and recalling it
+after a full restart. That needs a live agent session, not something
+automatable from here. Once Docker is fixed, the same migration/tests
+should be re-run against docker-compose's Postgres+Redis too, to confirm
+parity before tagging `v0.0.1-phase0` (the native setup is a personal dev
+stopgap, not the shipped target).

@@ -4,6 +4,7 @@ against the same contract-test suite for behavioral parity."""
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import asyncpg
@@ -16,6 +17,20 @@ _SELECT_COLUMNS = (
     "source_session_id, confidence, metadata, created_at, updated_at, "
     "deleted_at, deleted_reason"
 )
+
+
+def _is_syntactically_valid_id(memory_id: str) -> bool:
+    """`id` is a UUID column: a value that isn't even shaped like a UUID can
+    never match a row, so callers should treat it as "not found" rather than
+    let asyncpg's client-side parameter encoding raise a DataError that would
+    otherwise surface as an opaque StorageError — the in-memory fake has no
+    such format constraint, so this keeps both implementations' behavior
+    identical for the same input (see the shared contract-test suite)."""
+    try:
+        uuid.UUID(memory_id)
+    except ValueError:
+        return False
+    return True
 
 
 def _row_to_record(row: asyncpg.Record) -> MemoryRecord:
@@ -81,6 +96,8 @@ class PostgresMemoryRepository:
             raise StorageError(f"failed to create memory: {exc}") from exc
 
     async def get_by_id(self, namespace: str, memory_id: str) -> MemoryRecord | None:
+        if not _is_syntactically_valid_id(memory_id):
+            return None
         try:
             async with self._pool.acquire() as conn:
                 row = await conn.fetchrow(
@@ -111,6 +128,8 @@ class PostgresMemoryRepository:
         return _row_to_record(row) if row is not None else None
 
     async def update(self, memory_id: str, changes: MemoryUpdate) -> MemoryRecord:
+        if not _is_syntactically_valid_id(memory_id):
+            raise NotFoundError(f"memory {memory_id!r} not found")
         fields: list[str] = []
         values: list[Any] = []
         if changes.content is not None:
@@ -142,6 +161,8 @@ class PostgresMemoryRepository:
         return _row_to_record(row)
 
     async def soft_delete(self, memory_id: str, reason: str | None) -> MemoryRecord:
+        if not _is_syntactically_valid_id(memory_id):
+            raise NotFoundError(f"memory {memory_id!r} not found")
         try:
             async with self._pool.acquire() as conn:
                 existing = await conn.fetchrow(

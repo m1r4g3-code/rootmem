@@ -25,6 +25,14 @@ docker compose up -d
 uv run python scripts/migrate.py
 ```
 
+**If Docker isn't available**: the app talks to Postgres/Redis only through
+config (`.env`), so a native install works too — run Postgres 17 and Redis
+however you like, point `.env` at their host/port/credentials, then `uv run
+python scripts/migrate.py`. `0001_init.sql` skips the pgvector extension
+gracefully if it isn't installed (Phase 0 doesn't use it yet). See
+`scripts/manual_recall_check.md`'s blocker note for the exact native setup
+used during this project's own Phase 0 development.
+
 ## Running the MCP server
 
 ```bash

@@ -34,23 +34,19 @@ async def pool() -> AsyncIterator[asyncpg.Pool]:
         await created_pool.close()
 
 
-@pytest.fixture
-def repository(pool: asyncpg.Pool) -> PostgresMemoryRepository:
-    return PostgresMemoryRepository(pool)
-
-
 class TestPostgresMemoryRepository(MemoryRepositoryContract):
-    pass
+    @pytest.fixture
+    def repository(self, pool: asyncpg.Pool) -> PostgresMemoryRepository:
+        return PostgresMemoryRepository(pool)
 
 
 @pytest.mark.asyncio
-async def test_soft_delete_preserves_row_and_sets_deleted_fields(
-    repository: PostgresMemoryRepository, pool: asyncpg.Pool
-) -> None:
+async def test_soft_delete_preserves_row_and_sets_deleted_fields(pool: asyncpg.Pool) -> None:
     """The plan's exit criterion explicitly requires verifying, via direct
     inspection (not just the repository's own filtered read path), that a
     'forgotten' row still physically exists with deleted_at/deleted_reason
     set — this is what distinguishes soft-delete from a hard DELETE (ADR 0004)."""
+    repository = PostgresMemoryRepository(pool)
     created = await repository.create(
         NewMemory(namespace="ns", content="soft-deleted row", source="test")
     )

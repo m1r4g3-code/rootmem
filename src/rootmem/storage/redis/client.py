@@ -14,7 +14,13 @@ from rootmem.config import Settings
 
 
 def create_client(settings: Settings) -> Redis:
-    return Redis.from_url(settings.redis_url)
+    # protocol=2 (RESP2): redis-py defaults to negotiating RESP3 via HELLO,
+    # which pre-6.0 Redis servers (including the legacy Windows Redis 3.0.504
+    # port used as a native-install stopgap on this machine) don't support.
+    # RESP2 works against every Redis version and Phase 0 uses no RESP3-only
+    # feature, so pinning it costs nothing against the docker-compose target
+    # (Redis 7.4) either.
+    return Redis.from_url(settings.redis_url, protocol=2)
 
 
 async def ping(client: Redis) -> bool:

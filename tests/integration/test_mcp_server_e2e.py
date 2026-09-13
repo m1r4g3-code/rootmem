@@ -39,10 +39,20 @@ async def session() -> AsyncIterator[ClientSession]:
         args=["-m", "rootmem.integration.mcp.server"],
         env=server_env,
     )
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as client_session:
-            await client_session.initialize()
-            yield client_session
+    try:
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as client_session:
+                await client_session.initialize()
+                yield client_session
+    except RuntimeError as exc:
+        # Known Windows-specific anyio/mcp SDK teardown quirk: closing the
+        # subprocess's stdio pipes can raise "Attempted to exit cancel scope
+        # in a different task than it was entered in" from stdio_client's
+        # own __aexit__, strictly during cleanup, after the test body (and
+        # its assertions) have already completed successfully. Suppress
+        # only this specific message so a real failure still surfaces.
+        if "cancel scope" not in str(exc):
+            raise
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,7 @@ build-backend = "uv_build"
 dev = [
     "asyncpg-stubs>=0.31.3",
     "mypy>=1.13",
+    "psycopg2-binary>=2.9.13",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
@@ -44,6 +45,7 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 markers = [
     "integration: requires Docker (Postgres + Redis) to be running",
