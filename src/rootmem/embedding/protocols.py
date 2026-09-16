@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from rootmem.logging import get_logger
+
 
 class EmbeddingError(Exception):
     """Raised when the embedding provider is unreachable or rejects a
@@ -27,3 +29,16 @@ class EmbeddingProvider(Protocol):
         padded result silently.
         """
         ...
+
+
+async def embed_or_none(provider: EmbeddingProvider, text: str) -> list[float] | None:
+    """The one place both `remember` and `capture.ingest` implement FR1's
+    graceful degradation: an embedding-provider failure logs a warning and
+    yields `None` rather than propagating — the write it feeds into must
+    still succeed."""
+    try:
+        vectors = await provider.embed([text])
+    except EmbeddingError as exc:
+        get_logger().warning("operation=embed outcome=degraded error=%s", exc)
+        return None
+    return vectors[0]

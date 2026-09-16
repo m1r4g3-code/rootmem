@@ -10,7 +10,9 @@ name to an `EntityRecord.id` (via `GraphRepository.upsert_entity`) is
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from rootmem.storage.graph_models import ContradictionResolution
 
 
 class ExtractionContext(BaseModel):
@@ -52,3 +54,15 @@ class ExtractedRelation(BaseModel):
 class ExtractionResult(BaseModel):
     entities: list[ExtractedEntity] = Field(default_factory=list)
     relations: list[ExtractedRelation] = Field(default_factory=list)
+
+
+class ApplyExtractionResult(BaseModel):
+    """Return value of `extraction.pipeline.apply_extraction` — the
+    resolutions in `result.relations` order, plus every distinct entity id
+    touched (upserted or found), so callers like `capture.ingest` can report
+    a summary without re-deriving it from `resolutions` alone."""
+
+    model_config = ConfigDict(frozen=True)
+
+    resolutions: list[ContradictionResolution]
+    entity_ids: list[str]

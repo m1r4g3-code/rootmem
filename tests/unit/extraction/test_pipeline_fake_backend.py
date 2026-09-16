@@ -32,14 +32,15 @@ async def test_creates_entities_and_relation_with_resolved_ids() -> None:
         ],
     )
 
-    resolutions = await apply_extraction(graph, "ns", result)
+    apply_result = await apply_extraction(graph, "ns", result)
 
-    assert len(resolutions) == 1
+    assert len(apply_result.resolutions) == 1
     alice = await graph.find_entity_by_name("ns", "Person", "Alice")
     acme = await graph.find_entity_by_name("ns", "Organization", "Acme Corp")
     assert alice is not None and acme is not None
-    assert resolutions[0].new.subject_entity_id == alice.id
-    assert resolutions[0].new.object_entity_id == acme.id
+    assert apply_result.resolutions[0].new.subject_entity_id == alice.id
+    assert apply_result.resolutions[0].new.object_entity_id == acme.id
+    assert set(apply_result.entity_ids) == {alice.id, acme.id}
 
 
 @pytest.mark.asyncio
@@ -61,12 +62,12 @@ async def test_resolves_entities_not_explicitly_listed() -> None:
         ]
     )
 
-    resolutions = await apply_extraction(graph, "ns", result)
+    apply_result = await apply_extraction(graph, "ns", result)
 
-    assert len(resolutions) == 1
+    assert len(apply_result.resolutions) == 1
     bob = await graph.find_entity_by_name("ns", "Person", "Bob")
     assert bob is not None
-    assert resolutions[0].new.subject_entity_id == bob.id
+    assert apply_result.resolutions[0].new.subject_entity_id == bob.id
 
 
 @pytest.mark.asyncio
@@ -98,11 +99,12 @@ async def test_applies_contradiction_rule_across_two_extraction_calls() -> None:
         ]
     )
 
-    first_resolutions = await apply_extraction(graph, "ns", first_result)
-    second_resolutions = await apply_extraction(graph, "ns", second_result)
+    first_apply = await apply_extraction(graph, "ns", first_result)
+    second_apply = await apply_extraction(graph, "ns", second_result)
+    second_resolutions = second_apply.resolutions
 
     assert second_resolutions[0].previous is not None
-    assert second_resolutions[0].previous.id == first_resolutions[0].new.id
+    assert second_resolutions[0].previous.id == first_apply.resolutions[0].new.id
     assert second_resolutions[0].previous.valid_to is not None
     assert second_resolutions[0].new.is_active
 

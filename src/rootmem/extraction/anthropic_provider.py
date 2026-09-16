@@ -101,9 +101,7 @@ class AnthropicExtractionProvider:
         except anthropic.APIError as exc:
             raise ExtractionError(f"Anthropic extraction request failed: {exc}") from exc
 
-        tool_use = next(
-            (block for block in message.content if block.type == "tool_use"), None
-        )
+        tool_use = next((block for block in message.content if block.type == "tool_use"), None)
         if tool_use is None:
             raise ExtractionError("Anthropic response contained no tool_use block")
 

@@ -12,7 +12,7 @@ re-decide anything `create_relation` already decides.
 
 from __future__ import annotations
 
-from rootmem.extraction.models import ExtractionResult
+from rootmem.extraction.models import ApplyExtractionResult, ExtractionResult
 from rootmem.storage.graph_models import ContradictionResolution, NewEntity, NewRelation
 from rootmem.storage.graph_protocols import GraphRepository
 
@@ -22,11 +22,10 @@ async def apply_extraction(
     namespace: str,
     result: ExtractionResult,
     source_memory_id: str | None = None,
-) -> list[ContradictionResolution]:
+) -> ApplyExtractionResult:
     """Upsert every entity `result` names, create every relation it
     describes (resolving subject/object names to entity ids first), and
-    link each entity to `source_memory_id` if one is given. Returns one
-    `ContradictionResolution` per relation, in `result.relations` order."""
+    link each entity to `source_memory_id` if one is given."""
     entity_ids: dict[tuple[str, str], str] = {}
 
     async def _resolve(name: str, entity_type: str) -> str:
@@ -66,4 +65,4 @@ async def apply_extraction(
         for entity_id in entity_ids.values():
             await graph.link_memory_entity(source_memory_id, entity_id)
 
-    return resolutions
+    return ApplyExtractionResult(resolutions=resolutions, entity_ids=list(entity_ids.values()))
