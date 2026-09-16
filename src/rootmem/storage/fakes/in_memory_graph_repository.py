@@ -27,6 +27,7 @@ class InMemoryGraphRepository:
     def __init__(self, contradiction_confidence_floor: float = 0.5) -> None:
         self._entities: dict[str, EntityRecord] = {}
         self._relations: dict[str, RelationRecord] = {}
+        self._memory_entities: set[tuple[str, str]] = set()
         self._contradiction_confidence_floor = contradiction_confidence_floor
 
     async def upsert_entity(self, entity: NewEntity) -> EntityRecord:
@@ -148,6 +149,17 @@ class InMemoryGraphRepository:
                 break
 
         return results
+
+    async def link_memory_entity(self, memory_id: str, entity_id: str) -> None:
+        self._memory_entities.add((memory_id, entity_id))
+
+    @property
+    def memory_entity_links(self) -> frozenset[tuple[str, str]]:
+        """Test-only introspection — no `GraphRepository` Protocol method
+        surfaces `memory_entities` reads yet (no MCP tool needs it in Phase
+        1), but tests of *this fake's* behavior specifically need a way to
+        observe what `link_memory_entity` recorded."""
+        return frozenset(self._memory_entities)
 
     def _find_active_relation(
         self, namespace: str, subject_entity_id: str, predicate: str

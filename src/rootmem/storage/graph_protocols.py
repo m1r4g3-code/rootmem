@@ -80,3 +80,10 @@ class GraphRepository(Protocol):
         — this is what makes the bi-temporal record inspectable, not just
         the currently-active view."""
         ...
+
+    async def link_memory_entity(self, memory_id: str, entity_id: str) -> None:
+        """Record that `entity_id` was extracted from `memory_id` (the
+        `memory_entities` join table). Idempotent — linking the same pair
+        twice is a no-op, since `extraction.pipeline` may re-link an entity
+        already mentioned earlier in the same memory."""
+        ...

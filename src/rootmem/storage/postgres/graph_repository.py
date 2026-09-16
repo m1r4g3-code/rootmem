@@ -279,3 +279,18 @@ class PostgresGraphRepository:
         except (asyncpg.PostgresError, ValueError) as exc:
             raise StorageError(f"failed to find related relations: {exc}") from exc
         return [_row_to_relation(row) for row in rows]
+
+    async def link_memory_entity(self, memory_id: str, entity_id: str) -> None:
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO memory_entities (memory_id, entity_id)
+                    VALUES ($1, $2)
+                    ON CONFLICT (memory_id, entity_id) DO NOTHING
+                    """,
+                    memory_id,
+                    entity_id,
+                )
+        except (asyncpg.PostgresError, ValueError) as exc:
+            raise StorageError(f"failed to link memory to entity: {exc}") from exc

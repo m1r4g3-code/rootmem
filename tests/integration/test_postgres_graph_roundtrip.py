@@ -83,3 +83,32 @@ async def test_superseded_relation_row_still_physically_exists(pool: asyncpg.Poo
     assert row["valid_to"] is not None
     assert row["superseded_by"] is not None
     assert str(row["object_entity_id"]) == acme.id
+
+
+@pytest.mark.asyncio
+async def test_link_memory_entity_is_idempotent(pool: asyncpg.Pool) -> None:
+    """The Postgres-specific version of
+    tests/unit/storage/test_in_memory_graph_repository.py's equivalent test
+    — memory_entities.memory_id has a real foreign key to memories(id), so
+    this needs an actual memory row, unlike the shared contract suite."""
+    repository = PostgresGraphRepository(pool)
+    entity = await repository.upsert_entity(
+        NewEntity(namespace="ns", entity_type="Person", name="Alice")
+    )
+
+    async with pool.acquire() as conn:
+        memory_id = await conn.fetchval(
+            "INSERT INTO memories (namespace, content, source) "
+            "VALUES ('ns', 'test memory', 'test') RETURNING id"
+        )
+
+    await repository.link_memory_entity(str(memory_id), entity.id)
+    await repository.link_memory_entity(str(memory_id), entity.id)
+
+    async with pool.acquire() as conn:
+        count = await conn.fetchval(
+            "SELECT COUNT(*) FROM memory_entities WHERE memory_id = $1 AND entity_id = $2",
+            memory_id,
+            entity.id,
+        )
+    assert count == 1
