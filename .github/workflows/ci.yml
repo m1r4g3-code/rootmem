@@ -3,7 +3,9 @@ name: CI
 on:
   push:
     branches: [master, main]
+    tags: ["v*"]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   lint-and-unit:
@@ -68,3 +70,47 @@ jobs:
         run: uv run python scripts/migrate.py
       - name: Integration tests
         run: uv run pytest -m integration -v
+
+  integration-external:
+    name: Real-API integration tests (Voyage + Anthropic)
+    # NFR6 (docs/requirements/phase1-requirements.md): these tests call the
+    # live Voyage/Anthropic APIs and cost real money per run, so this job
+    # is deliberately NOT part of the on-every-push trigger above — it only
+    # runs on a version tag (the Phase 1+ release gate) or when someone
+    # explicitly asks for it via workflow_dispatch. Needs VOYAGE_API_KEY and
+    # ANTHROPIC_API_KEY set as repository secrets.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.0-pg16
+        env:
+          POSTGRES_USER: rootmem
+          POSTGRES_PASSWORD: rootmem_dev_password
+          POSTGRES_DB: rootmem
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rootmem -d rootmem"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: rootmem
+      POSTGRES_PASSWORD: rootmem_dev_password
+      POSTGRES_DB: rootmem
+      VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+      - name: Run migrations
+        run: uv run python scripts/migrate.py
+      - name: Real-API integration tests
+        run: uv run pytest -m integration_external -v

@@ -200,6 +200,8 @@ class RelationView(BaseModel):
     valid_to: datetime | None
     is_active: bool
     is_contested: bool
+    supersedes: str | None
+    superseded_by: str | None
 
     @classmethod
     def from_record(cls, record: RelationRecord) -> RelationView:
@@ -214,6 +216,8 @@ class RelationView(BaseModel):
             valid_to=record.valid_to,
             is_active=record.is_active,
             is_contested=record.is_contested,
+            supersedes=record.supersedes,
+            superseded_by=record.superseded_by,
         )
 
 
