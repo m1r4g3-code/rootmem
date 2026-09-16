@@ -9,10 +9,12 @@ place that bridges the two.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from rootmem.capture.models import IngestResult
+from rootmem.storage.graph_models import RelationRecord
 from rootmem.storage.models import MemoryRecord
 
 
@@ -147,6 +149,10 @@ class SearchParams(BaseModel):
     namespace: str = "default"
     limit: int = Field(default=10, ge=1, le=50)
     source: str | None = None
+    # "hybrid" (ADR 0007) is the default — a deliberate behavior change from
+    # Phase 0's full-text-only search, since real semantic retrieval is the
+    # whole point of this phase. "text" preserves the exact Phase 0 behavior.
+    mode: Literal["text", "semantic", "hybrid"] = "hybrid"
 
     @model_validator(mode="after")
     def _validate(self) -> SearchParams:
@@ -165,3 +171,83 @@ class SearchResultItem(BaseModel):
 
 class SearchResponse(BaseModel):
     results: list[SearchResultItem]
+
+
+# --- related --------------------------------------------------------------
+
+
+class RelatedParams(BaseModel):
+    entity_name: str
+    entity_type: str
+    namespace: str = "default"
+    max_hops: int = Field(default=1, ge=1, le=5)
+
+    @model_validator(mode="after")
+    def _validate(self) -> RelatedParams:
+        _reject_blank(self.entity_name, "entity_name")
+        _reject_blank(self.entity_type, "entity_type")
+        return self
+
+
+class RelationView(BaseModel):
+    id: str
+    subject_entity_id: str
+    predicate: str
+    object_entity_id: str | None
+    object_literal: str | None
+    confidence: float
+    valid_from: datetime
+    valid_to: datetime | None
+    is_active: bool
+    is_contested: bool
+
+    @classmethod
+    def from_record(cls, record: RelationRecord) -> RelationView:
+        return cls(
+            id=record.id,
+            subject_entity_id=record.subject_entity_id,
+            predicate=record.predicate,
+            object_entity_id=record.object_entity_id,
+            object_literal=record.object_literal,
+            confidence=record.confidence,
+            valid_from=record.valid_from,
+            valid_to=record.valid_to,
+            is_active=record.is_active,
+            is_contested=record.is_contested,
+        )
+
+
+class RelatedResult(BaseModel):
+    entity_found: bool
+    entity_id: str | None = None
+    relations: list[RelationView] = Field(default_factory=list)
+
+
+# --- ingest_session ---------------------------------------------------------
+
+
+class IngestSessionParams(BaseModel):
+    transcript: str
+    source: str
+    namespace: str = "default"
+    session_id: str | None = None
+
+    @model_validator(mode="after")
+    def _validate(self) -> IngestSessionParams:
+        _reject_blank(self.transcript, "transcript")
+        _reject_blank(self.source, "source")
+        return self
+
+
+class IngestSessionResult(BaseModel):
+    memory_id: str
+    embedded: bool
+    entities_extracted: int
+    relations_extracted: int
+    superseded_count: int
+    contested_count: int
+    extraction_degraded: bool
+
+    @classmethod
+    def from_ingest_result(cls, result: IngestResult) -> IngestSessionResult:
+        return cls(**result.model_dump())

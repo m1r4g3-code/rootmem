@@ -19,7 +19,7 @@ from rootmem.storage.graph_models import (
     NewRelation,
     RelationRecord,
 )
-from rootmem.storage.graph_normalize import normalize_entity_name
+from rootmem.storage.graph_normalize import normalize_entity_name, normalize_entity_type
 from rootmem.storage.graph_protocols import NotFoundError
 
 
@@ -39,7 +39,7 @@ class InMemoryGraphRepository:
         record = EntityRecord(
             id=str(uuid.uuid4()),
             namespace=entity.namespace,
-            entity_type=entity.entity_type,
+            entity_type=normalize_entity_type(entity.entity_type),
             name=entity.name,
             canonical_key=normalize_entity_name(entity.name),
             attributes=entity.attributes,
@@ -59,10 +59,11 @@ class InMemoryGraphRepository:
         self, namespace: str, entity_type: str, name: str
     ) -> EntityRecord | None:
         canonical_key = normalize_entity_name(name)
+        canonical_type = normalize_entity_type(entity_type)
         for entity in self._entities.values():
             if (
                 entity.namespace == namespace
-                and entity.entity_type == entity_type
+                and entity.entity_type == canonical_type
                 and entity.canonical_key == canonical_key
             ):
                 return entity

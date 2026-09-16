@@ -33,7 +33,11 @@ class GraphRepositoryContract:
 
         assert entity.name == "Alice"
         assert entity.canonical_key == "alice"
-        assert entity.entity_type == "Person"
+        # entity_type is normalized (lowercased), not preserved verbatim
+        # like `name` — a real run against the live Anthropic API showed
+        # entity-type casing isn't a reliable signal worth keeping around;
+        # see storage/graph_normalize.py's docstring for the full story.
+        assert entity.entity_type == "person"
 
     async def test_upsert_entity_dedupes_by_normalized_name(
         self, repository: GraphRepository

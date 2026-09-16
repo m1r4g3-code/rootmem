@@ -27,11 +27,19 @@ from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 
 from rootmem.config import get_settings
+from rootmem.embedding.protocols import EmbeddingProvider
+from rootmem.embedding.voyage import VoyageEmbeddingProvider
+from rootmem.extraction.anthropic_provider import AnthropicExtractionProvider
+from rootmem.extraction.protocols import ExtractionProvider
 from rootmem.integration.mcp.schemas import (
     ForgetParams,
     ForgetResult,
+    IngestSessionParams,
+    IngestSessionResult,
     RecallParams,
     RecallResult,
+    RelatedParams,
+    RelatedResult,
     RememberParams,
     RememberResult,
     SearchParams,
@@ -40,12 +48,16 @@ from rootmem.integration.mcp.schemas import (
     UpdateResult,
 )
 from rootmem.integration.mcp.tools.forget import forget as forget_impl
+from rootmem.integration.mcp.tools.ingest_session import ingest_session as ingest_session_impl
 from rootmem.integration.mcp.tools.recall import recall as recall_impl
+from rootmem.integration.mcp.tools.related import related as related_impl
 from rootmem.integration.mcp.tools.remember import remember as remember_impl
 from rootmem.integration.mcp.tools.search import search as search_impl
 from rootmem.integration.mcp.tools.update import update as update_impl
 from rootmem.logging import configure_logging, get_logger
+from rootmem.storage.graph_protocols import GraphRepository
 from rootmem.storage.postgres.connection import create_pool
+from rootmem.storage.postgres.graph_repository import PostgresGraphRepository
 from rootmem.storage.postgres.repository import PostgresMemoryRepository
 from rootmem.storage.protocols import MemoryRepository, NotFoundError
 
@@ -58,7 +70,12 @@ def _validated[ModelT: BaseModel](model: type[ModelT], **kwargs: Any) -> ModelT:
         raise ToolError(messages) from exc
 
 
-def build_server(repository: MemoryRepository) -> MCPServer:
+def build_server(
+    repository: MemoryRepository,
+    graph_repository: GraphRepository,
+    embedding_provider: EmbeddingProvider,
+    extraction_provider: ExtractionProvider,
+) -> MCPServer:
     server = MCPServer(name="rootmem")
 
     @server.tool()
@@ -86,7 +103,7 @@ def build_server(repository: MemoryRepository) -> MCPServer:
             metadata=metadata or {},
             idempotency_key=idempotency_key,
         )
-        return await remember_impl(repository, params)
+        return await remember_impl(repository, embedding_provider, params)
 
     @server.tool()
     async def recall(
@@ -132,12 +149,59 @@ def build_server(repository: MemoryRepository) -> MCPServer:
         namespace: str = "default",
         limit: int = 10,
         source: str | None = None,
+        mode: str = "hybrid",
     ) -> SearchResponse:
-        """Ranked full-text search over non-deleted memories in a namespace."""
+        """Text, semantic, or hybrid (default) search over non-deleted
+        memories in a namespace. `mode`: "text" | "semantic" | "hybrid"."""
         params = _validated(
-            SearchParams, query=query, namespace=namespace, limit=limit, source=source
+            SearchParams,
+            query=query,
+            namespace=namespace,
+            limit=limit,
+            source=source,
+            mode=mode,
         )
-        return await search_impl(repository, params)
+        return await search_impl(repository, embedding_provider, params)
+
+    @server.tool()
+    async def related(
+        entity_name: str,
+        entity_type: str,
+        namespace: str = "default",
+        max_hops: int = 1,
+    ) -> RelatedResult:
+        """Entities/relations connected to a named entity, up to `max_hops`
+        hops away — includes superseded (non-active) relations with their
+        full bi-temporal history."""
+        params = _validated(
+            RelatedParams,
+            entity_name=entity_name,
+            entity_type=entity_type,
+            namespace=namespace,
+            max_hops=max_hops,
+        )
+        return await related_impl(graph_repository, params)
+
+    @server.tool()
+    async def ingest_session(
+        transcript: str,
+        source: str,
+        namespace: str = "default",
+        session_id: str | None = None,
+    ) -> IngestSessionResult:
+        """Embed and store `transcript` as a memory, then extract entities/
+        relations from it into the graph. Both embedding and extraction
+        degrade gracefully on failure rather than blocking the write."""
+        params = _validated(
+            IngestSessionParams,
+            transcript=transcript,
+            source=source,
+            namespace=namespace,
+            session_id=session_id,
+        )
+        return await ingest_session_impl(
+            repository, graph_repository, embedding_provider, extraction_provider, params
+        )
 
     return server
 
@@ -149,8 +213,13 @@ async def main_async() -> None:
 
     pool = await create_pool(settings)
     try:
-        repository = PostgresMemoryRepository(pool)
-        server = build_server(repository)
+        repository = PostgresMemoryRepository(
+            pool, settings.hybrid_search_weight_text, settings.hybrid_search_weight_vector
+        )
+        graph_repository = PostgresGraphRepository(pool, settings.contradiction_confidence_floor)
+        embedding_provider = VoyageEmbeddingProvider(settings)
+        extraction_provider = AnthropicExtractionProvider(settings)
+        server = build_server(repository, graph_repository, embedding_provider, extraction_provider)
         logger.info("rootmem MCP server starting (stdio transport)")
         await server.run_stdio_async()
     finally:

@@ -14,7 +14,7 @@ from rootmem.storage.graph_models import (
     NewRelation,
     RelationRecord,
 )
-from rootmem.storage.graph_normalize import normalize_entity_name
+from rootmem.storage.graph_normalize import normalize_entity_name, normalize_entity_type
 from rootmem.storage.protocols import StorageError
 
 _ENTITY_COLUMNS = (
@@ -68,6 +68,7 @@ class PostgresGraphRepository:
 
     async def upsert_entity(self, entity: NewEntity) -> EntityRecord:
         canonical_key = normalize_entity_name(entity.name)
+        canonical_type = normalize_entity_type(entity.entity_type)
         try:
             async with self._pool.acquire() as conn:
                 row = await conn.fetchrow(
@@ -78,7 +79,7 @@ class PostgresGraphRepository:
                     RETURNING {_ENTITY_COLUMNS}
                     """,
                     entity.namespace,
-                    entity.entity_type,
+                    canonical_type,
                     entity.name,
                     canonical_key,
                     entity.attributes,
@@ -90,7 +91,7 @@ class PostgresGraphRepository:
                         WHERE namespace = $1 AND entity_type = $2 AND canonical_key = $3
                         """,
                         entity.namespace,
-                        entity.entity_type,
+                        canonical_type,
                         canonical_key,
                     )
                 if (
@@ -119,6 +120,7 @@ class PostgresGraphRepository:
         self, namespace: str, entity_type: str, name: str
     ) -> EntityRecord | None:
         canonical_key = normalize_entity_name(name)
+        canonical_type = normalize_entity_type(entity_type)
         try:
             async with self._pool.acquire() as conn:
                 row = await conn.fetchrow(
@@ -127,7 +129,7 @@ class PostgresGraphRepository:
                     WHERE namespace = $1 AND entity_type = $2 AND canonical_key = $3
                     """,
                     namespace,
-                    entity_type,
+                    canonical_type,
                     canonical_key,
                 )
         except asyncpg.PostgresError as exc:

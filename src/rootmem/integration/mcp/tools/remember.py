@@ -9,6 +9,7 @@ error types (see ADR 0002 — server.py is a thin adapter).
 
 from __future__ import annotations
 
+from rootmem.embedding.protocols import EmbeddingProvider, embed_or_none
 from rootmem.integration.mcp.schemas import RememberParams, RememberResult
 from rootmem.observability.metrics import log_operation
 from rootmem.storage.models import NewMemory
@@ -16,13 +17,19 @@ from rootmem.storage.protocols import MemoryRepository
 
 
 @log_operation("remember")
-async def remember(repository: MemoryRepository, params: RememberParams) -> RememberResult:
+async def remember(
+    repository: MemoryRepository,
+    embedding_provider: EmbeddingProvider,
+    params: RememberParams,
+) -> RememberResult:
+    embedding = await embed_or_none(embedding_provider, params.content)
     record = await repository.create(
         NewMemory(
             namespace=params.namespace,
             key=params.key,
             idempotency_key=params.idempotency_key,
             content=params.content,
+            content_embedding=embedding,
             source=params.source,
             source_session_id=params.source_session_id,
             confidence=params.confidence,
