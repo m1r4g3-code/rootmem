@@ -13,8 +13,8 @@ from rootmem.storage.models import MemoryRecord, MemoryUpdate, NewMemory, Search
 from rootmem.storage.protocols import NotFoundError, StorageError
 
 _SELECT_COLUMNS = (
-    "id, schema_version, namespace, key, idempotency_key, content, source, "
-    "source_session_id, confidence, metadata, created_at, updated_at, "
+    "id, schema_version, namespace, key, idempotency_key, content, content_embedding, "
+    "source, source_session_id, confidence, metadata, created_at, updated_at, "
     "deleted_at, deleted_reason"
 )
 
@@ -34,6 +34,10 @@ def _is_syntactically_valid_id(memory_id: str) -> bool:
 
 
 def _row_to_record(row: asyncpg.Record) -> MemoryRecord:
+    # pgvector's asyncpg codec (register_vector, see connection.py) decodes
+    # a VECTOR column to its own Vector wrapper, not a plain list — .to_list()
+    # is how it documents converting back to list[float].
+    embedding = row["content_embedding"]
     return MemoryRecord(
         id=str(row["id"]),
         schema_version=row["schema_version"],
@@ -41,6 +45,7 @@ def _row_to_record(row: asyncpg.Record) -> MemoryRecord:
         key=row["key"],
         idempotency_key=row["idempotency_key"],
         content=row["content"],
+        content_embedding=embedding.to_list() if embedding is not None else None,
         source=row["source"],
         source_session_id=row["source_session_id"],
         confidence=row["confidence"],
@@ -53,8 +58,12 @@ def _row_to_record(row: asyncpg.Record) -> MemoryRecord:
 
 
 class PostgresMemoryRepository:
-    def __init__(self, pool: asyncpg.Pool) -> None:
+    def __init__(
+        self, pool: asyncpg.Pool, weight_text: float = 0.5, weight_vector: float = 0.5
+    ) -> None:
         self._pool = pool
+        self._weight_text = weight_text
+        self._weight_vector = weight_vector
 
     async def create(self, memory: NewMemory) -> MemoryRecord:
         try:
@@ -62,9 +71,9 @@ class PostgresMemoryRepository:
                 row = await conn.fetchrow(
                     f"""
                     INSERT INTO memories
-                        (namespace, key, idempotency_key, content, source,
+                        (namespace, key, idempotency_key, content, content_embedding, source,
                          source_session_id, confidence, metadata)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                     ON CONFLICT (namespace, idempotency_key) WHERE idempotency_key IS NOT NULL
                     DO NOTHING
                     RETURNING {_SELECT_COLUMNS}
@@ -73,6 +82,7 @@ class PostgresMemoryRepository:
                     memory.key,
                     memory.idempotency_key,
                     memory.content,
+                    memory.content_embedding,
                     memory.source,
                     memory.source_session_id,
                     memory.confidence,
@@ -218,4 +228,81 @@ class PostgresMemoryRepository:
                 )
         except asyncpg.PostgresError as exc:
             raise StorageError(f"failed to search memories: {exc}") from exc
+        return [SearchResult(record=_row_to_record(row), score=row["score"]) for row in rows]
+
+    async def search_semantic(
+        self,
+        namespace: str,
+        query_embedding: list[float],
+        limit: int,
+        source: str | None = None,
+    ) -> list[SearchResult]:
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    f"""
+                    SELECT {_SELECT_COLUMNS},
+                           1 - (content_embedding <=> $2) AS score
+                    FROM memories
+                    WHERE namespace = $1
+                      AND deleted_at IS NULL
+                      AND content_embedding IS NOT NULL
+                      AND ($4::text IS NULL OR source = $4)
+                    ORDER BY score DESC
+                    LIMIT $3
+                    """,
+                    namespace,
+                    query_embedding,
+                    limit,
+                    source,
+                )
+        except asyncpg.PostgresError as exc:
+            raise StorageError(f"failed to semantic-search memories: {exc}") from exc
+        return [SearchResult(record=_row_to_record(row), score=row["score"]) for row in rows]
+
+    async def search_hybrid(
+        self,
+        namespace: str,
+        query: str,
+        query_embedding: list[float],
+        limit: int,
+        source: str | None = None,
+    ) -> list[SearchResult]:
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    f"""
+                    SELECT * FROM (
+                        SELECT {_SELECT_COLUMNS},
+                               $5 * COALESCE(
+                                   ts_rank(
+                                       to_tsvector('english', content),
+                                       plainto_tsquery('english', $2)
+                                   ),
+                                   0
+                               )
+                               + $6 * COALESCE(
+                                   CASE WHEN content_embedding IS NOT NULL
+                                        THEN 1 - (content_embedding <=> $3) END,
+                                   0
+                               ) AS score
+                        FROM memories
+                        WHERE namespace = $1
+                          AND deleted_at IS NULL
+                          AND ($4::text IS NULL OR source = $4)
+                    ) scored
+                    WHERE score > 0
+                    ORDER BY score DESC
+                    LIMIT $7
+                    """,
+                    namespace,
+                    query,
+                    query_embedding,
+                    source,
+                    self._weight_text,
+                    self._weight_vector,
+                    limit,
+                )
+        except asyncpg.PostgresError as exc:
+            raise StorageError(f"failed to hybrid-search memories: {exc}") from exc
         return [SearchResult(record=_row_to_record(row), score=row["score"]) for row in rows]

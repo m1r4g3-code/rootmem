@@ -27,7 +27,9 @@ async def pool() -> AsyncIterator[asyncpg.Pool]:
     settings = get_settings()
     created_pool = await create_pool(settings)
     async with created_pool.acquire() as conn:
-        await conn.execute("TRUNCATE memories")
+        # CASCADE: relations.source_memory_id references memories (Phase 1,
+        # ADR 0006) — a plain TRUNCATE fails once that FK exists.
+        await conn.execute("TRUNCATE memories CASCADE")
     try:
         yield created_pool
     finally:

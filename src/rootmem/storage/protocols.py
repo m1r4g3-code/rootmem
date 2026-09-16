@@ -81,3 +81,32 @@ class MemoryRepository(Protocol):
     ) -> list[SearchResult]:
         """Full-text search over non-deleted records, ranked by relevance."""
         ...
+
+    async def search_semantic(
+        self,
+        namespace: str,
+        query_embedding: list[float],
+        limit: int,
+        source: str | None = None,
+    ) -> list[SearchResult]:
+        """Semantic search over non-deleted records with a populated
+        `content_embedding`, ranked by cosine similarity to `query_embedding`
+        (ADR 0007). Records with no embedding (e.g. from an embedding-provider
+        failure at write time) are excluded, not scored as a non-match."""
+        ...
+
+    async def search_hybrid(
+        self,
+        namespace: str,
+        query: str,
+        query_embedding: list[float],
+        limit: int,
+        source: str | None = None,
+    ) -> list[SearchResult]:
+        """Blend of `search_text` and `search_semantic` via
+        `retrieval.ranking.hybrid_score` (docs/math-spec/phase1-math-spec.md)
+        — a provisional linear combination, not the Phase 4 multi-factor
+        formula. Records with no embedding fall back to a pure text-rank
+        contribution (weight_vector's term is 0), so they aren't silently
+        excluded just because they predate embedding population."""
+        ...

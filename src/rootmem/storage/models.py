@@ -53,12 +53,21 @@ class MemoryRecord(BaseModel):
 
 
 class NewMemory(BaseModel):
-    """Input to `MemoryRepository.create` — no id/timestamps, those are assigned by the store."""
+    """Input to `MemoryRepository.create` — no id/timestamps, those are assigned by the store.
+
+    `content_embedding` is populated by the `remember` tool handler calling
+    an `EmbeddingProvider` before `create` (ADR 0007/0009) — the repository
+    itself never calls out to an embedding API (layer isolation, ADR 0003).
+    None on embedding-provider failure: the write still succeeds with a dark
+    embedding rather than being blocked (graceful degradation, see
+    docs/requirements/phase1-requirements.md FR1).
+    """
 
     namespace: str
     key: str | None = None
     idempotency_key: str | None = None
     content: str
+    content_embedding: list[float] | None = None
     source: str
     source_session_id: str | None = None
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)

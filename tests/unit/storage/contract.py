@@ -18,6 +18,18 @@ import pytest
 from rootmem.storage.models import MemoryUpdate, NewMemory
 from rootmem.storage.protocols import MemoryRepository, NotFoundError
 
+# The real Postgres column is VECTOR(1024) (ADR 0007) — the in-memory fake
+# doesn't care about dimension, but a shared contract test needs vectors
+# that work against both, so these are full 1024-dim, differing only in
+# which single dimension is set to 1.0 (still trivially "close" vs "far").
+_EMBEDDING_DIM = 1024
+
+
+def _unit_vector(hot_index: int) -> list[float]:
+    vector = [0.0] * _EMBEDDING_DIM
+    vector[hot_index] = 1.0
+    return vector
+
 
 class MemoryRepositoryContract:
     """Subclass and provide an async `repository` fixture yielding a fresh
@@ -206,3 +218,84 @@ class MemoryRepositoryContract:
 
         assert len(results) == 1
         assert results[0].record.source == "cursor"
+
+    async def test_search_semantic_ranks_by_cosine_similarity(
+        self, repository: MemoryRepository
+    ) -> None:
+        close = await repository.create(
+            NewMemory(
+                namespace="ns",
+                content="close match",
+                source="test",
+                content_embedding=_unit_vector(0),
+            )
+        )
+        far = await repository.create(
+            NewMemory(
+                namespace="ns",
+                content="far match",
+                source="test",
+                content_embedding=_unit_vector(1),
+            )
+        )
+
+        results = await repository.search_semantic("ns", _unit_vector(0), limit=10)
+
+        assert [r.record.id for r in results] == [close.id, far.id]
+
+    async def test_search_semantic_excludes_records_without_embedding(
+        self, repository: MemoryRepository
+    ) -> None:
+        await repository.create(
+            NewMemory(namespace="ns", content="no embedding here", source="test")
+        )
+
+        results = await repository.search_semantic("ns", _unit_vector(0), limit=10)
+
+        assert results == []
+
+    async def test_search_hybrid_finds_purely_semantic_match_with_no_lexical_overlap(
+        self, repository: MemoryRepository
+    ) -> None:
+        """The exit criterion's core claim: hybrid search must find a match
+        via the embedding alone when there's zero shared vocabulary with the
+        query — proving the vector component does real work (see
+        docs/requirements/phase1-requirements.md's exit criterion, part c)."""
+        semantic_match = await repository.create(
+            NewMemory(
+                namespace="ns",
+                content="Globex Corporation hired a new software engineer last week",
+                source="test",
+                content_embedding=_unit_vector(0),
+            )
+        )
+        await repository.create(
+            NewMemory(
+                namespace="ns",
+                content="a completely different sentence involving rainfall totals",
+                source="test",
+                content_embedding=_unit_vector(1),
+            )
+        )
+
+        # Deliberately zero shared vocabulary with the stored content above.
+        text_only_results = await repository.search_text(
+            "ns", "who is employed there currently", limit=10
+        )
+        hybrid_results = await repository.search_hybrid(
+            "ns", "who is employed there currently", _unit_vector(0), limit=10
+        )
+
+        assert semantic_match.id not in [r.record.id for r in text_only_results]
+        assert hybrid_results[0].record.id == semantic_match.id
+
+    async def test_search_hybrid_excludes_zero_score_results(
+        self, repository: MemoryRepository
+    ) -> None:
+        await repository.create(
+            NewMemory(namespace="ns", content="totally unrelated", source="test")
+        )
+
+        results = await repository.search_hybrid("ns", "nomatch", _unit_vector(0), limit=10)
+
+        assert results == []
