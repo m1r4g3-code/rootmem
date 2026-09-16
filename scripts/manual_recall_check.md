@@ -139,6 +139,25 @@ exit criterion.
 
 ---
 
+## Update (2026-09-16, Phase 1 kickoff): local dev database moved to Neon
+
+Phase 1 makes pgvector a hard requirement (no more Phase 0-style graceful
+skip). The native-Postgres setup above has no working `vector` extension —
+this machine has no Visual Studio C++ toolchain installed, so a native
+Windows pgvector build (see `scripts/spike_pgvector_windows_build.md`)
+wasn't attempted, and Docker Desktop is still stuck (see the blocker note
+below, unchanged). Local dev now points `.env` at a dedicated Neon project
+(`rootmem-dev`, database+role `rootmem`, isolated from the account's other,
+unrelated Neon project) — pgvector confirmed working immediately
+(`CREATE EXTENSION vector` succeeds, no install needed), all 23 integration
+tests re-run and pass against it (network latency to `us-east-1` makes the
+suite noticeably slower than local Postgres — ~5 min vs. ~15s — but every
+test is still green). CI and production are unaffected either way; they
+already use the official Docker image on Linux runners. See
+`docs/adr/0011-pgvector-native-windows-resolution.md`.
+
+---
+
 ## Blocker note (2026-09-13, updated same day)
 
 Docker Desktop's engine will not start on this machine — `docker info` hangs

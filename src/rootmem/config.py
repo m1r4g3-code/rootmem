@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     postgres_db: str = "rootmem"
     postgres_host: str = "localhost"
     postgres_port: int = Field(default=5432, gt=0, le=65535)
+    # "prefer" (not "require"): negotiates SSL with hosts that offer it (e.g.
+    # Neon, which mandates SSL) while still connecting to a local Postgres
+    # that has no SSL configured at all (the Phase 0 native/Docker setups).
+    postgres_sslmode: str = "prefer"
 
     redis_host: str = "localhost"
     redis_port: int = Field(default=6379, gt=0, le=65535)
@@ -32,6 +36,7 @@ class Settings(BaseSettings):
         return (
             f"postgresql://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+            f"?sslmode={self.postgres_sslmode}"
         )
 
     @property

@@ -18,7 +18,8 @@ def test_postgres_dsn_is_well_formed() -> None:
     settings = Settings(_env_file=None, postgres_host="db", postgres_port=5433)
 
     assert settings.postgres_dsn == (
-        f"postgresql://{settings.postgres_user}:{settings.postgres_password}@db:5433/{settings.postgres_db}"
+        f"postgresql://{settings.postgres_user}:{settings.postgres_password}@db:5433/"
+        f"{settings.postgres_db}?sslmode={settings.postgres_sslmode}"
     )
 
 
