@@ -31,6 +31,32 @@ class Settings(BaseSettings):
     rootmem_default_namespace: str = "default"
     rootmem_log_level: str = "INFO"
 
+    # Phase 1 external LLM APIs (ADR 0009). None by default — code paths
+    # that need them (EmbeddingProvider/ExtractionProvider real
+    # implementations) fail explicitly if unset, at the point of use, not
+    # here — a fakes-only unit test run needs neither key.
+    voyage_api_key: str | None = None
+    anthropic_api_key: str | None = None
+
+    # voyage-4 @ 1024 dims, HNSW (ADR 0007) — explicitly provisional, see
+    # docs/research/phase1-research-memo.md's open questions.
+    voyage_model: str = "voyage-4"
+    voyage_output_dimension: int = 1024
+
+    # Haiku-tier, per ADR 0009 — exact dated ID checked against actual
+    # availability, not guessed (same discipline as ADR 0002).
+    extraction_model: str = "claude-haiku-4-5-20251001"
+    extraction_max_tokens_per_call: int = Field(default=4096, gt=0)
+
+    # Provisional linear blend weights (ADR 0007/phase1-math-spec) — equal
+    # weight by default, revisit once real usage data exists.
+    hybrid_search_weight_text: float = Field(default=0.5, ge=0.0)
+    hybrid_search_weight_vector: float = Field(default=0.5, ge=0.0)
+
+    # ADR 0008's deterministic contradiction rule: most-recent-wins above
+    # this floor, else both sides are flagged contested.
+    contradiction_confidence_floor: float = Field(default=0.5, ge=0.0, le=1.0)
+
     @property
     def postgres_dsn(self) -> str:
         return (

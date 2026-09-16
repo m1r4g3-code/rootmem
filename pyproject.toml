@@ -1,15 +1,17 @@
 [project]
 name = "rootmem"
 version = "0.1.0"
-description = "ROOTMEM — human-brain-inspired, MCP-native agent memory system (Phase 0: Foundations)"
+description = "ROOTMEM — human-brain-inspired, MCP-native agent memory system"
 requires-python = ">=3.13"
 dependencies = [
+    "anthropic>=1.6.0",
     "asyncpg>=0.30",
     "mcp>=1.0",
     "pgvector>=0.5.0",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "redis>=5.2",
+    "voyageai>=0.5.0",
 ]
 
 [build-system]
@@ -50,4 +52,5 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 markers = [
     "integration: requires Docker (Postgres + Redis) to be running",
+    "integration_external: calls a real external LLM API (Voyage/Anthropic) and costs money per run (ADR 0009/NFR6) — kept out of the default integration job, run separately/sparingly",
 ]
