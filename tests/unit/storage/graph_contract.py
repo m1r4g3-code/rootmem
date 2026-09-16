@@ -1,0 +1,281 @@
+"""Shared behavioral contract for every `GraphRepository` implementation.
+
+Both `InMemoryGraphRepository` and `PostgresGraphRepository` are run against
+this same suite (see test_in_memory_graph_repository.py and
+tests/integration/test_postgres_graph_roundtrip.py) — exact parity with the
+`MemoryRepositoryContract`/`contract.py` pattern.
+
+This module is a base class, not a test file itself (no `test_` prefix), so
+pytest doesn't try to collect it directly.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from rootmem.storage.graph_models import NewEntity, NewRelation
+from rootmem.storage.graph_protocols import GraphRepository
+
+
+class GraphRepositoryContract:
+    """Subclass and provide an async `repository` fixture yielding a fresh
+    `GraphRepository`, constructed with `contradiction_confidence_floor=0.5`,
+    for each test."""
+
+    @pytest.fixture
+    def repository(self) -> GraphRepository:  # pragma: no cover - overridden by subclasses
+        raise NotImplementedError
+
+    async def test_upsert_entity_creates_new(self, repository: GraphRepository) -> None:
+        entity = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Person", name="Alice")
+        )
+
+        assert entity.name == "Alice"
+        assert entity.canonical_key == "alice"
+        assert entity.entity_type == "Person"
+
+    async def test_upsert_entity_dedupes_by_normalized_name(
+        self, repository: GraphRepository
+    ) -> None:
+        first = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Person", name="Alice")
+        )
+        second = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Person", name="  ALICE  ")
+        )
+
+        assert second.id == first.id
+
+    async def test_upsert_entity_scoped_by_type_and_namespace(
+        self, repository: GraphRepository
+    ) -> None:
+        person = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Person", name="Acme")
+        )
+        org = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Organization", name="Acme")
+        )
+        other_ns = await repository.upsert_entity(
+            NewEntity(namespace="ns-2", entity_type="Person", name="Acme")
+        )
+
+        assert len({person.id, org.id, other_ns.id}) == 3
+
+    async def test_get_entity_by_id_wrong_namespace_returns_none(
+        self, repository: GraphRepository
+    ) -> None:
+        entity = await repository.upsert_entity(
+            NewEntity(namespace="ns-a", entity_type="Person", name="Alice")
+        )
+
+        assert await repository.get_entity_by_id("ns-b", entity.id) is None
+
+    async def test_find_entity_by_name_missing_returns_none(
+        self, repository: GraphRepository
+    ) -> None:
+        assert await repository.find_entity_by_name("ns", "Person", "Nobody") is None
+
+    async def test_create_relation_with_no_prior_is_simply_active(
+        self, repository: GraphRepository
+    ) -> None:
+        alice = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Person", name="Alice")
+        )
+        acme = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Organization", name="Acme")
+        )
+
+        resolution = await repository.create_relation(
+            NewRelation(
+                namespace="ns",
+                subject_entity_id=alice.id,
+                predicate="works_at",
+                object_entity_id=acme.id,
+                confidence=1.0,
+            )
+        )
+
+        assert resolution.previous is None
+        assert resolution.contested is False
+        assert resolution.new.is_active
+        assert resolution.new.supersedes is None
+
+    async def test_create_relation_supersedes_prior_when_confident(
+        self, repository: GraphRepository
+    ) -> None:
+        alice = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Person", name="Alice")
+        )
+        acme = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Organization", name="Acme")
+        )
+        globex = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Organization", name="Globex")
+        )
+
+        first = await repository.create_relation(
+            NewRelation(
+                namespace="ns",
+                subject_entity_id=alice.id,
+                predicate="works_at",
+                object_entity_id=acme.id,
+                confidence=1.0,
+            )
+        )
+        second = await repository.create_relation(
+            NewRelation(
+                namespace="ns",
+                subject_entity_id=alice.id,
+                predicate="works_at",
+                object_entity_id=globex.id,
+                confidence=1.0,
+            )
+        )
+
+        assert second.contested is False
+        assert second.new.supersedes == first.new.id
+        assert second.previous is not None
+        assert second.previous.id == first.new.id
+        assert second.previous.superseded_by == second.new.id
+        assert second.previous.valid_to is not None
+        assert second.new.is_active
+
+    async def test_create_relation_marks_contested_when_low_confidence(
+        self, repository: GraphRepository
+    ) -> None:
+        alice = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Person", name="Alice")
+        )
+        acme = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Organization", name="Acme")
+        )
+        globex = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Organization", name="Globex")
+        )
+
+        first = await repository.create_relation(
+            NewRelation(
+                namespace="ns",
+                subject_entity_id=alice.id,
+                predicate="works_at",
+                object_entity_id=acme.id,
+                confidence=1.0,
+            )
+        )
+        second = await repository.create_relation(
+            NewRelation(
+                namespace="ns",
+                subject_entity_id=alice.id,
+                predicate="works_at",
+                object_entity_id=globex.id,
+                confidence=0.1,
+            )
+        )
+
+        assert second.contested is True
+        assert second.new.is_contested
+        assert second.new.is_active
+        assert second.new.supersedes is None
+        assert second.previous is not None
+        assert second.previous.id == first.new.id
+        assert second.previous.is_contested
+        assert second.previous.is_active  # not superseded — both remain active
+
+    async def test_related_returns_relations_touching_entity(
+        self, repository: GraphRepository
+    ) -> None:
+        alice = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Person", name="Alice")
+        )
+        acme = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Organization", name="Acme")
+        )
+        bob = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Person", name="Bob")
+        )
+
+        await repository.create_relation(
+            NewRelation(
+                namespace="ns",
+                subject_entity_id=alice.id,
+                predicate="works_at",
+                object_entity_id=acme.id,
+            )
+        )
+        await repository.create_relation(
+            NewRelation(
+                namespace="ns",
+                subject_entity_id=bob.id,
+                predicate="works_at",
+                object_entity_id=acme.id,
+            )
+        )
+
+        alice_relations = await repository.related("ns", alice.id, max_hops=1)
+
+        assert len(alice_relations) == 1
+        assert alice_relations[0].subject_entity_id == alice.id
+
+    async def test_related_includes_superseded_relations(
+        self, repository: GraphRepository
+    ) -> None:
+        alice = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Person", name="Alice")
+        )
+        acme = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Organization", name="Acme")
+        )
+        globex = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Organization", name="Globex")
+        )
+
+        await repository.create_relation(
+            NewRelation(
+                namespace="ns",
+                subject_entity_id=alice.id,
+                predicate="works_at",
+                object_entity_id=acme.id,
+                confidence=1.0,
+            )
+        )
+        await repository.create_relation(
+            NewRelation(
+                namespace="ns",
+                subject_entity_id=alice.id,
+                predicate="works_at",
+                object_entity_id=globex.id,
+                confidence=1.0,
+            )
+        )
+
+        relations = await repository.related("ns", alice.id, max_hops=1)
+
+        assert len(relations) == 2
+        active = [r for r in relations if r.is_active]
+        superseded = [r for r in relations if not r.is_active]
+        assert len(active) == 1
+        assert len(superseded) == 1
+        assert active[0].object_entity_id == globex.id
+        assert superseded[0].object_entity_id == acme.id
+        assert superseded[0].valid_to is not None
+
+    async def test_related_respects_namespace(self, repository: GraphRepository) -> None:
+        alice_a = await repository.upsert_entity(
+            NewEntity(namespace="ns-a", entity_type="Person", name="Alice")
+        )
+        acme_a = await repository.upsert_entity(
+            NewEntity(namespace="ns-a", entity_type="Organization", name="Acme")
+        )
+        await repository.create_relation(
+            NewRelation(
+                namespace="ns-a",
+                subject_entity_id=alice_a.id,
+                predicate="works_at",
+                object_entity_id=acme_a.id,
+            )
+        )
+
+        relations = await repository.related("ns-b", alice_a.id, max_hops=1)
+
+        assert relations == []
