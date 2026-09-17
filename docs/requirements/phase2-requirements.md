@@ -1,0 +1,55 @@
+# Phase 2 Requirements & Constraints — Consolidation, Salience & Bayesian Belief
+
+## Exit criterion
+
+> Given a namespace that receives, via `ingest_session`: **(i)** three separate transcripts each restating "Alice works at Acme Corp" in different words (corroborating evidence for the same relation), **(ii)** one transcript containing a novel, one-off fact submitted with `importance_flag=1.0`, and **(iii)** enough total episodes to cross `consolidation_episode_threshold` — followed later by a transcript stating "Alice joined Globex as an engineer" (a genuine contradiction, different object) — the system must, end-to-end via MCP:
+>
+> **(a)** after the threshold is crossed, either `ingest_session`'s inline trigger check or an explicit `consolidate` call runs a consolidation pass that clusters the three near-duplicate Alice/Acme episodes via similarity-threshold union-find, distills them into one durable semantic relation via an LLM distillation call, and records `derivation="distilled"` plus `relation_provenance` links back to all three source episodes — provable via `related`;
+> **(b)** every episode processed has a `salience_score` computed and persisted, and the flagged-important, novel one-off memory scores measurably higher than a routine, unflagged, redundant restatement;
+> **(c)** the three corroborating restatements measurably raise the active `(Alice, works_at, Acme Corp)` relation's `confidence` above its original extraction-time confidence — proving corroboration is no longer misfiled as supersession (the Phase 1 gap named in `docs/research/phase2-research-memo.md`);
+> **(d)** when the Globex contradiction arrives, the system computes the new relation's own posterior belief, compares it against the old relation's now-strengthened posterior, and only supersedes if it exceeds it by `bayesian_supersede_margin`;
+> **(e)** an agent calls the new `feedback` MCP tool reporting the winning relation as `confirmed`, and its `confidence` measurably increases again as a direct, observable result — proving the retrieval-outcome feedback loop ADR 0008 named as Phase 2's own trigger condition is real and wired end-to-end.
+
+This is the single pass/fail gate for tagging `v0.2.0-phase2`, validated by one automated integration test (`tests/integration/test_phase2_exit_criterion.py`) and one manual dogfooding pass recorded in `scripts/manual_phase2_check.md` — the same dual automated+manual sign-off ritual Phase 0/1 used.
+
+## Functional requirements
+
+- FR1: `remember`/`ingest_session` gain an `importance_flag` parameter (`float`, default `0.0`, range `[0, 1]`) — a cheap, optional, agent-supplied input to salience scoring; no other change to write-path latency or behavior.
+- FR2: A new `consolidate` MCP tool (`namespace`, `force: bool = False`) runs one consolidation pass: checks the trigger condition (episode count or time elapsed since last run) unless `force=True`, and if met, fetches unconsolidated episodes, computes salience for each, clusters near-duplicates by similarity threshold, distills each qualifying cluster into a semantic relation via an LLM call, marks processed episodes consolidated, and records a `consolidation_runs` row. No-ops cleanly (returns a result indicating no run occurred) when the trigger condition isn't met and `force` is false.
+- FR3: `ingest_session` additionally checks the same trigger condition inline after a successful write and, if met, fires a background consolidation pass (`asyncio.create_task`) without blocking its own return — consolidation latency must never attach to `ingest_session`'s response time.
+- FR4: A new `feedback` MCP tool (`relation_id`, `namespace`, `outcome: "confirmed" | "contradicted"`, `confidence: float = 1.0`, `note: str | None = None`) records a `relation_feedback` row and applies a Bayesian belief update to the target relation's `belief_alpha`/`belief_beta`/`confidence`, returning the updated relation.
+- FR5: `create_relation`'s contradiction handling is replaced with a Bayesian decision: a new relation whose `(subject_entity_id, predicate, object_entity_id/object_literal)` exactly matches the currently-active relation is treated as **corroboration** (raises the existing relation's belief, no new row superseding it); a new relation with the same `(subject_entity_id, predicate)` but a different object is treated as a **candidate contradiction**, resolved by comparing posterior beliefs and superseding only if the new relation's posterior exceeds the old one's by `bayesian_supersede_margin` — otherwise both are marked `metadata.contested = true`, unchanged from Phase 1's escape hatch.
+- FR6: Every relation created by distillation records `derivation="distilled"` and a `relation_provenance` row per source episode it was clustered from; every relation created by extraction continues to record `derivation="extracted"` (the Phase 1 default, unchanged) and a `relation_provenance` row for its single source episode, generalizing Phase 1's `source_memory_id` column rather than replacing it.
+- FR7: Salience scoring (`novelty`, `importance_flag`, `repetition`, `task_relevance`) runs once per episode during consolidation, not synchronously during `remember`/`ingest_session`, and persists `salience_score` on the `memories` row.
+- FR8: `consolidation/cli.py` provides a command-line entrypoint (`python -m rootmem.consolidation.cli --namespace <ns> [--force]`) mirroring `capture/cli.py`'s exact shape, for scheduled/manual consolidation independent of any running MCP session.
+
+## Non-functional requirements
+
+- NFR1 (write-path latency unaffected): `remember`/`ingest_session` latency budgets (Phase 1's NFR1, ~2s) are unchanged — salience scoring and consolidation are batch/background work, never inline blocking work in the write path.
+- NFR2 (no new worker infrastructure): consolidation execution uses only infrastructure already present in this project (the existing MCP server process, `asyncio.create_task` backgrounding, a CLI entrypoint) — no new queue/worker service (Celery, RQ, n8n) is introduced (ADR 0012).
+- NFR3 (no new heavy ML dependency): distillation clustering uses pgvector cosine similarity (already a production dependency since Phase 1) plus pure-Python union-find — no `numpy`/`scikit-learn`-class dependency is added to `pyproject.toml` (ADR 0015).
+- NFR4 (type safety): `mypy --strict` continues to pass with zero errors, zero suppressions, across all new modules (`consolidation/`, `extraction/contradiction.py`, the extended `storage/`).
+- NFR5 (testability): all new business logic (the Bayesian update, salience scoring, clustering, the consolidation trigger) is a pure function, unit-testable with zero I/O, zero external-API, zero Docker dependency — matching the existing `retrieval/ranking.py`/Phase 1 `extraction` pattern.
+- NFR6 (schema discipline): new columns follow `memories`/`relations`' existing conventions — `DOUBLE PRECISION` for `belief_alpha`/`belief_beta`/`salience_score`/`importance_flag` (never `REAL`, per the Phase 0 lesson), `namespace` scoping throughout, never a hard `DELETE` (`relation_feedback` and `consolidation_runs` are append-only).
+- NFR7 (cost control): real-API integration tests exercising `AnthropicDistillationProvider` run in the existing sparse, secret-gated `integration-external` CI job (Phase 1's NFR6 job), not a new one.
+- NFR8 (config): all new tunables load via the existing `pydantic-settings` `Settings` class, fail-fast at startup, documented as provisional defaults in `docs/math-spec/phase2-math-spec.md` — no new config mechanism introduced.
+- NFR9 (layer isolation): `consolidation/` never imports `anthropic` directly outside `anthropic_distillation_provider.py` — distillation is a Protocol-based port (`DistillationProvider`), consistent with ADR 0009's precedent for `EmbeddingProvider`/`ExtractionProvider`.
+- NFR10 (background task safety): any `asyncio.create_task` used for backgrounded consolidation is held in a referenced collection with a completion callback — an unreferenced task object is eligible for garbage collection mid-flight, a documented asyncio pitfall this phase must not reintroduce (the exact technique `server.py`'s `_LazyEmbeddingProvider`/`_LazyExtractionProvider` already uses for a different problem).
+
+## Explicit non-goals for Phase 2
+
+Episodic→procedural distillation and failure→lesson distillation (Phase 3, bundled with the SKILL.md format work they depend on — see the user's explicit scope decision recorded in the master plan); decay/forgetting curves, trust/provenance scoring, the multi-factor retrieval-ranking formula (Phase 2 supplies only the `salience` term's raw score — wiring it into `retrieval/ranking.py`'s ranking formula is still Phase 4), and a cryptographically tamper-evident audit log (`relation_feedback` is a plain event-record table, not hash-chained/signed — that remains Phase 4) — all Phase 4; k-means/HDBSCAN or any `scikit-learn`/`numpy`-class ML dependency (evaluated and rejected per ADR 0015); a new worker/queue service (Celery/RQ/n8n — rejected per ADR 0012); a direct agent-asserted-relation authoring path via `remember` (only `feedback` and extraction/distillation create or touch relations this phase); implicit retrieval-signal mining from `search`/`related` call logs (rejected per ADR 0014 — a read is not validation); real weight-tuning/A-B infrastructure for salience or Bayesian priors (documented provisional defaults only, same honesty pattern as Phase 1's `hybrid_search_weight_*`); sophisticated entity resolution/coreference (unchanged from Phase 1 — exact normalized-name match only); cross-instance identity continuity and REST API/remote transport (Phase 4/5+, unchanged). These are non-goals, not deferred requirements to sneak in early.
+
+## Traceability to charter global standards
+
+| Charter standard | How Phase 2 satisfies it |
+|---|---|
+| Type safety everywhere | `mypy --strict` CI gate, extended to all new modules |
+| Schema versioning from day one | New columns/tables follow `memories`/`relations`' existing conventions |
+| Every write is attributable | Every relation (extracted or distilled) carries `relation_provenance` links back to its source episode(s); every `feedback` call is recorded in `relation_feedback` |
+| Every destructive operation is soft | The Bayesian update never deletes a relation or evidence record; `relation_feedback`/`consolidation_runs` are append-only |
+| Idempotency by default | `consolidate` with an unmet trigger condition and `force=False` is a clean no-op, not an error |
+| Observability from first commit | Consolidation runs, salience scores, and belief updates are logged via the existing `observability/metrics.py` pattern |
+| No unbounded LLM calls | Distillation runs once per qualifying cluster per consolidation pass, bounded by `consolidation_batch_size`; `extraction_max_tokens_per_call` bounds each call, same as Phase 1 |
+| Config over code | All new tunables in `pydantic-settings`, per NFR8 |
+| Everything testable in isolation | `ConsolidationRepository`, `DistillationProvider` Protocols, each with a fake, per NFR5 |

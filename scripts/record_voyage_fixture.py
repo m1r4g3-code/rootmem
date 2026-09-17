@@ -25,6 +25,14 @@ SENTENCES = [
     "the weather forecast predicts heavy rain this weekend",
     "Bob works at Acme Corp",
     "the sky is blue and the grass is green",
+    # Added for Phase 2 (consolidation/clustering, corroboration testing):
+    # near-duplicate restatements of the same fact, for similarity-threshold
+    # union-find clustering (ADR 0015) and Bayesian corroboration (ADR 0013)
+    # tests to exercise genuine near-duplicate structure, not synthetic
+    # hash-based stand-ins.
+    "Alice is employed at Acme Corp",
+    "Alice's employer is Acme Corp",
+    "The engineering team relocated to a new office at 500 Market Street.",
 ]
 
 OUTPUT_PATH = (
