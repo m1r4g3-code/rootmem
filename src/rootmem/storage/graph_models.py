@@ -11,7 +11,7 @@ the contradiction-resolution semantics `RelationRecord.supersedes`/
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -60,8 +60,14 @@ class RelationRecord(BaseModel):
     learned it). `valid_to is None` means the relation is currently active.
 
     A contradiction never deletes a row (ADR 0004's soft-delete philosophy,
-    extended to the graph by ADR 0008): the loser gets `valid_to` and
+    extended to the graph by ADR 0008, now decided by ADR 0013's Bayesian
+    update instead of a flat floor): the loser gets `valid_to` and
     `superseded_by` set; the winner gets `supersedes` set.
+
+    `confidence` is a cached, recomputed function of `belief_alpha`/
+    `belief_beta` (ADR 0013) — `confidence = belief_alpha / (belief_alpha +
+    belief_beta)` — never independently assigned by a caller. See
+    `extraction.contradiction` for the update logic.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -75,6 +81,8 @@ class RelationRecord(BaseModel):
     object_literal: str | None = None
 
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    belief_alpha: float = Field(default=1.0, gt=0.0)
+    belief_beta: float = Field(default=1.0, gt=0.0)
 
     valid_from: datetime
     valid_to: datetime | None = None
@@ -83,6 +91,7 @@ class RelationRecord(BaseModel):
     supersedes: str | None = None
     superseded_by: str | None = None
 
+    derivation: Literal["extracted", "distilled"] = "extracted"
     source_memory_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -96,7 +105,11 @@ class RelationRecord(BaseModel):
 
 
 class NewRelation(BaseModel):
-    """Input to `GraphRepository.create_relation` — no id/timestamps, assigned by the store."""
+    """Input to `GraphRepository.create_relation` — no id/timestamps, assigned by the store.
+    `belief_alpha`/`belief_beta` are not caller-supplied: they are computed
+    internally by `extraction.contradiction.resolve_contradiction` from
+    `confidence` and `derivation`, the same "exactly one place decides"
+    discipline `NewEntity.canonical_key` already established."""
 
     namespace: str
     subject_entity_id: str
@@ -104,6 +117,7 @@ class NewRelation(BaseModel):
     object_entity_id: str | None = None
     object_literal: str | None = None
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    derivation: Literal["extracted", "distilled"] = "extracted"
     source_memory_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -116,12 +130,18 @@ class NewRelation(BaseModel):
 
 class ContradictionResolution(BaseModel):
     """Result of resolving a new relation against the currently-active one
-    for the same `(namespace, subject_entity_id, predicate)`, per ADR 0008's
-    deterministic rule. `previous` is None when there was no active relation
-    to contradict — the new relation is simply active with no supersession."""
+    for the same `(namespace, subject_entity_id, predicate)`, per ADR 0013's
+    Bayesian belief update. `previous` is None when there was no active
+    relation to contradict, or when the exact-match `corroborated` case
+    updated the existing relation's belief in place rather than superseding
+    it — either way, no row was superseded. `new` is the relation the
+    caller should treat as authoritative: a freshly created row (`create`/
+    `supersede`/`contest`), or the same row `previous` referred to before,
+    now with an updated belief (`corroborate`)."""
 
     model_config = ConfigDict(frozen=True)
 
     new: RelationRecord
     previous: RelationRecord | None
     contested: bool
+    corroborated: bool = False

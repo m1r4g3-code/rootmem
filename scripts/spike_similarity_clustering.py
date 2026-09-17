@@ -17,7 +17,9 @@ import itertools
 import json
 from pathlib import Path
 
-FIXTURE_PATH = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "voyage_embeddings.json"
+FIXTURE_PATH = (
+    Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "voyage_embeddings.json"
+)
 
 # Expected cluster membership, by inspection of sentence content (not by
 # running the algorithm) -- the spike's job is to find a threshold that
@@ -89,8 +91,12 @@ def main() -> None:
     for threshold in (0.70, 0.75, 0.80, 0.85, 0.90):
         clusters = cluster_by_similarity(embeddings, threshold)
         clusters_as_sets = sorted((frozenset(c) for c in clusters), key=len, reverse=True)
-        matches_expected = sorted(frozenset(c) for c in EXPECTED_CLUSTERS) == sorted(clusters_as_sets)
-        print(f"threshold={threshold:.2f}: {len(clusters)} clusters, matches_expected={matches_expected}")
+        expected_sorted = sorted(frozenset(c) for c in EXPECTED_CLUSTERS)
+        matches_expected = expected_sorted == sorted(clusters_as_sets)
+        print(
+            f"threshold={threshold:.2f}: {len(clusters)} clusters, "
+            f"matches_expected={matches_expected}"
+        )
         if not matches_expected:
             for c in clusters_as_sets:
                 if len(c) > 1:

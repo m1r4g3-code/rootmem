@@ -28,6 +28,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from rootmem.config import Settings, get_settings
 from rootmem.embedding.protocols import EmbeddingProvider
+from rootmem.extraction.contradiction import BayesianSettings
 from rootmem.extraction.models import ExtractionContext, ExtractionResult
 from rootmem.extraction.protocols import ExtractionProvider
 
@@ -291,7 +292,7 @@ async def main_async() -> None:
         repository = PostgresMemoryRepository(
             pool, settings.hybrid_search_weight_text, settings.hybrid_search_weight_vector
         )
-        graph_repository = PostgresGraphRepository(pool, settings.contradiction_confidence_floor)
+        graph_repository = PostgresGraphRepository(pool, BayesianSettings.from_settings(settings))
         server = build_server(repository, graph_repository, embedding_provider, extraction_provider)
         logger.info("rootmem MCP server starting (stdio transport)")
         await server.run_stdio_async()

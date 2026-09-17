@@ -53,9 +53,46 @@ class Settings(BaseSettings):
     hybrid_search_weight_text: float = Field(default=0.5, ge=0.0)
     hybrid_search_weight_vector: float = Field(default=0.5, ge=0.0)
 
-    # ADR 0008's deterministic contradiction rule: most-recent-wins above
-    # this floor, else both sides are flagged contested.
-    contradiction_confidence_floor: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Phase 2 Bayesian belief update (ADR 0013), replacing ADR 0008's flat
+    # confidence-floor rule — see docs/math-spec/phase2-math-spec.md for the
+    # full derivation. All provisional defaults, not calibrated against real
+    # retrieval-outcome data yet (docs/research/phase2-research-memo.md).
+    bayesian_prior_strength: float = Field(default=2.0, gt=0.0)
+    bayesian_supersede_margin: float = Field(default=0.05, ge=0.0, le=1.0)
+    bayesian_source_reliability_extracted: float = Field(default=0.7, ge=0.0, le=1.0)
+    bayesian_source_reliability_distilled: float = Field(default=0.85, ge=0.0, le=1.0)
+    bayesian_source_reliability_feedback: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    # Phase 2 consolidation trigger (ADR 0012/docs/math-spec/phase2-math-spec.md).
+    consolidation_episode_threshold: int = Field(default=500, gt=0)
+    consolidation_time_window_hours: float = Field(default=24.0, gt=0.0)
+    consolidation_batch_size: int = Field(default=500, gt=0)
+
+    # Phase 2 distillation clustering (ADR 0015) — 0.80 validated empirically
+    # by scripts/spike_similarity_clustering.py against real voyage-4
+    # embeddings, not asserted from first principles.
+    distillation_similarity_threshold: float = Field(default=0.80, ge=0.0, le=1.0)
+    distillation_min_cluster_size: int = Field(default=2, ge=2)
+    # Defaults to extraction_model's value at settings-construction time if
+    # left unset (see the property below) — distillation reuses the same
+    # Haiku-tier model unless a future phase has reason to diverge.
+    distillation_model: str | None = None
+
+    # Phase 2 salience scoring (ADR 0016/docs/math-spec/phase2-math-spec.md).
+    # task_relevance's weight is 0.0: no task-modeling primitive exists yet
+    # to compute it from (honestly zeroed, not silently omitted from the
+    # formula's shape).
+    salience_weight_novelty: float = Field(default=1 / 3, ge=0.0)
+    salience_weight_importance: float = Field(default=1 / 3, ge=0.0)
+    salience_weight_repetition: float = Field(default=1 / 3, ge=0.0)
+    salience_weight_task_relevance: float = Field(default=0.0, ge=0.0)
+    repetition_similarity_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
+    novelty_neighbor_sample_size: int = Field(default=10, gt=0)
+    salience_repetition_saturation_count: int = Field(default=3, gt=0)
+
+    @property
+    def distillation_model_or_default(self) -> str:
+        return self.distillation_model or self.extraction_model
 
     @property
     def postgres_dsn(self) -> str:

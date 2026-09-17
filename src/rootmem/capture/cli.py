@@ -23,6 +23,7 @@ from rootmem.capture.ingest import ingest_transcript
 from rootmem.config import get_settings
 from rootmem.embedding.voyage import VoyageEmbeddingProvider
 from rootmem.extraction.anthropic_provider import AnthropicExtractionProvider
+from rootmem.extraction.contradiction import BayesianSettings
 from rootmem.logging import configure_logging, get_logger
 from rootmem.storage.postgres.connection import create_pool
 from rootmem.storage.postgres.graph_repository import PostgresGraphRepository
@@ -59,7 +60,7 @@ async def _run(argv: list[str]) -> int:
         memory_repository = PostgresMemoryRepository(
             pool, settings.hybrid_search_weight_text, settings.hybrid_search_weight_vector
         )
-        graph_repository = PostgresGraphRepository(pool, settings.contradiction_confidence_floor)
+        graph_repository = PostgresGraphRepository(pool, BayesianSettings.from_settings(settings))
         embedding_provider = VoyageEmbeddingProvider(settings)
         extraction_provider = AnthropicExtractionProvider(settings)
 

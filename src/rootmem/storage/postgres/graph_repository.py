@@ -5,8 +5,11 @@ recursive CTEs for traversal."""
 
 from __future__ import annotations
 
+from typing import Literal
+
 import asyncpg
 
+from rootmem.extraction.contradiction import BayesianSettings, apply_feedback, resolve_contradiction
 from rootmem.storage.graph_models import (
     ContradictionResolution,
     EntityRecord,
@@ -15,7 +18,7 @@ from rootmem.storage.graph_models import (
     RelationRecord,
 )
 from rootmem.storage.graph_normalize import normalize_entity_name, normalize_entity_type
-from rootmem.storage.protocols import StorageError
+from rootmem.storage.protocols import NotFoundError, StorageError
 
 _ENTITY_COLUMNS = (
     "id, namespace, entity_type, name, canonical_key, attributes, created_at, updated_at"
@@ -23,8 +26,8 @@ _ENTITY_COLUMNS = (
 
 _RELATION_COLUMNS = (
     "id, namespace, subject_entity_id, predicate, object_entity_id, object_literal, "
-    "confidence, valid_from, valid_to, recorded_at, supersedes, superseded_by, "
-    "source_memory_id, metadata"
+    "confidence, belief_alpha, belief_beta, valid_from, valid_to, recorded_at, supersedes, "
+    "superseded_by, derivation, source_memory_id, metadata"
 )
 _RELATION_COLUMNS_R_PREFIXED = ", ".join(f"r.{c.strip()}" for c in _RELATION_COLUMNS.split(","))
 
@@ -51,20 +54,31 @@ def _row_to_relation(row: asyncpg.Record) -> RelationRecord:
         object_entity_id=str(row["object_entity_id"]) if row["object_entity_id"] else None,
         object_literal=row["object_literal"],
         confidence=row["confidence"],
+        belief_alpha=row["belief_alpha"],
+        belief_beta=row["belief_beta"],
         valid_from=row["valid_from"],
         valid_to=row["valid_to"],
         recorded_at=row["recorded_at"],
         supersedes=str(row["supersedes"]) if row["supersedes"] else None,
         superseded_by=str(row["superseded_by"]) if row["superseded_by"] else None,
+        derivation=row["derivation"],
         source_memory_id=str(row["source_memory_id"]) if row["source_memory_id"] else None,
         metadata=row["metadata"],
     )
 
 
 class PostgresGraphRepository:
-    def __init__(self, pool: asyncpg.Pool, contradiction_confidence_floor: float = 0.5) -> None:
+    def __init__(
+        self, pool: asyncpg.Pool, bayesian_settings: BayesianSettings | None = None
+    ) -> None:
         self._pool = pool
-        self._contradiction_confidence_floor = contradiction_confidence_floor
+        self._bayesian_settings = bayesian_settings or BayesianSettings(
+            prior_strength=2.0,
+            supersede_margin=0.05,
+            reliability_extracted=0.7,
+            reliability_distilled=0.85,
+            reliability_feedback=1.0,
+        )
 
     async def upsert_entity(self, entity: NewEntity) -> EntityRecord:
         canonical_key = normalize_entity_name(entity.name)
@@ -151,11 +165,30 @@ class PostgresGraphRepository:
                     relation.predicate,
                 )
                 previous = _row_to_relation(previous_row) if previous_row is not None else None
-                contested = (
-                    previous is not None
-                    and relation.confidence <= self._contradiction_confidence_floor
+                decision = resolve_contradiction(
+                    previous, relation, relation.derivation, self._bayesian_settings
                 )
 
+                if decision.action == "corroborate":
+                    assert previous is not None
+                    updated_row = await conn.fetchrow(
+                        f"""
+                        UPDATE relations SET belief_alpha = $2, belief_beta = $3, confidence = $4
+                        WHERE id = $1
+                        RETURNING {_RELATION_COLUMNS}
+                        """,
+                        previous.id,
+                        decision.belief_alpha,
+                        decision.belief_beta,
+                        decision.belief_alpha / (decision.belief_alpha + decision.belief_beta),
+                    )
+                    assert updated_row is not None
+                    updated = _row_to_relation(updated_row)
+                    return ContradictionResolution(
+                        new=updated, previous=None, contested=False, corroborated=True
+                    )
+
+                contested = decision.action == "contest"
                 new_metadata = dict(relation.metadata)
                 if contested:
                     new_metadata["contested"] = True
@@ -164,8 +197,9 @@ class PostgresGraphRepository:
                     f"""
                     INSERT INTO relations
                         (namespace, subject_entity_id, predicate, object_entity_id,
-                         object_literal, confidence, supersedes, source_memory_id, metadata)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                         object_literal, confidence, belief_alpha, belief_beta, supersedes,
+                         derivation, source_memory_id, metadata)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                     RETURNING {_RELATION_COLUMNS}
                     """,
                     relation.namespace,
@@ -173,8 +207,11 @@ class PostgresGraphRepository:
                     relation.predicate,
                     relation.object_entity_id,
                     relation.object_literal,
-                    relation.confidence,
+                    decision.belief_alpha / (decision.belief_alpha + decision.belief_beta),
+                    decision.belief_alpha,
+                    decision.belief_beta,
                     previous.id if (previous is not None and not contested) else None,
+                    relation.derivation,
                     relation.source_memory_id,
                     new_metadata,
                 )
@@ -296,3 +333,94 @@ class PostgresGraphRepository:
                 )
         except (asyncpg.PostgresError, ValueError) as exc:
             raise StorageError(f"failed to link memory to entity: {exc}") from exc
+
+    async def link_relation_provenance(self, relation_id: str, memory_id: str) -> None:
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO relation_provenance (relation_id, memory_id)
+                    VALUES ($1, $2)
+                    ON CONFLICT (relation_id, memory_id) DO NOTHING
+                    """,
+                    relation_id,
+                    memory_id,
+                )
+        except (asyncpg.PostgresError, ValueError) as exc:
+            raise StorageError(f"failed to link relation provenance: {exc}") from exc
+
+    async def get_relation_provenance(self, namespace: str, relation_id: str) -> list[str]:
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT rp.memory_id FROM relation_provenance rp
+                    JOIN relations r ON r.id = rp.relation_id
+                    WHERE r.namespace = $1 AND rp.relation_id = $2
+                    """,
+                    namespace,
+                    relation_id,
+                )
+        except (asyncpg.PostgresError, ValueError) as exc:
+            raise StorageError(f"failed to get relation provenance: {exc}") from exc
+        return [str(row["memory_id"]) for row in rows]
+
+    async def record_feedback(
+        self,
+        namespace: str,
+        relation_id: str,
+        outcome: Literal["confirmed", "contradicted"],
+        reported_confidence: float,
+        note: str | None,
+    ) -> RelationRecord:
+        try:
+            async with self._pool.acquire() as conn, conn.transaction():
+                row = await conn.fetchrow(
+                    f"""
+                    SELECT {_RELATION_COLUMNS} FROM relations
+                    WHERE namespace = $1 AND id = $2
+                    FOR UPDATE
+                    """,
+                    namespace,
+                    relation_id,
+                )
+                if row is None:
+                    raise NotFoundError(
+                        f"relation {relation_id} not found in namespace {namespace}"
+                    )
+                relation = _row_to_relation(row)
+
+                new_alpha, new_beta = apply_feedback(
+                    relation.belief_alpha,
+                    relation.belief_beta,
+                    outcome=outcome,
+                    reported_confidence=reported_confidence,
+                    settings=self._bayesian_settings,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO relation_feedback
+                        (relation_id, namespace, outcome, reported_confidence, note)
+                    VALUES ($1, $2, $3, $4, $5)
+                    """,
+                    relation_id,
+                    namespace,
+                    outcome,
+                    reported_confidence,
+                    note,
+                )
+                updated_row = await conn.fetchrow(
+                    f"""
+                    UPDATE relations SET belief_alpha = $2, belief_beta = $3, confidence = $4
+                    WHERE id = $1
+                    RETURNING {_RELATION_COLUMNS}
+                    """,
+                    relation_id,
+                    new_alpha,
+                    new_beta,
+                    new_alpha / (new_alpha + new_beta),
+                )
+                assert updated_row is not None
+                return _row_to_relation(updated_row)
+        except asyncpg.PostgresError as exc:
+            raise StorageError(f"failed to record feedback: {exc}") from exc

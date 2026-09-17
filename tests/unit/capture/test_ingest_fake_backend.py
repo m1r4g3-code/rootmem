@@ -125,7 +125,7 @@ async def test_extraction_failure_degrades_but_still_stores_memory() -> None:
 @pytest.mark.asyncio
 async def test_second_ingest_supersedes_contradicting_relation() -> None:
     memory_repo = InMemoryMemoryRepository()
-    graph_repo = InMemoryGraphRepository(contradiction_confidence_floor=0.5)
+    graph_repo = InMemoryGraphRepository()
     embedding = _StubEmbeddingProvider()
     extraction = ScriptedExtractionProvider(
         {

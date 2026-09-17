@@ -36,7 +36,7 @@ async def pool() -> AsyncIterator[asyncpg.Pool]:
 class TestPostgresGraphRepository(GraphRepositoryContract):
     @pytest.fixture
     def repository(self, pool: asyncpg.Pool) -> PostgresGraphRepository:
-        return PostgresGraphRepository(pool, contradiction_confidence_floor=0.5)
+        return PostgresGraphRepository(pool)
 
 
 @pytest.mark.asyncio
@@ -45,7 +45,7 @@ async def test_superseded_relation_row_still_physically_exists(pool: asyncpg.Poo
     test_soft_delete_preserves_row_and_sets_deleted_fields — the plan's exit
     criterion explicitly requires verifying this via direct SQL, not just the
     repository's own filtered read path."""
-    repository = PostgresGraphRepository(pool, contradiction_confidence_floor=0.5)
+    repository = PostgresGraphRepository(pool)
     alice = await repository.upsert_entity(
         NewEntity(namespace="ns", entity_type="Person", name="Alice")
     )
@@ -56,12 +56,17 @@ async def test_superseded_relation_row_still_physically_exists(pool: asyncpg.Poo
         NewEntity(namespace="ns", entity_type="Organization", name="Globex")
     )
 
+    # Deliberate confidence asymmetry -- see graph_contract.py's
+    # test_create_relation_supersedes_prior_when_confident for why two
+    # equally-uncorroborated relations at the same confidence wouldn't
+    # supersede each other under the Bayesian rule (ADR 0013).
     first = await repository.create_relation(
         NewRelation(
             namespace="ns",
             subject_entity_id=alice.id,
             predicate="works_at",
             object_entity_id=acme.id,
+            confidence=0.6,
         )
     )
     await repository.create_relation(
@@ -70,6 +75,7 @@ async def test_superseded_relation_row_still_physically_exists(pool: asyncpg.Poo
             subject_entity_id=alice.id,
             predicate="works_at",
             object_entity_id=globex.id,
+            confidence=1.0,
         )
     )
 
@@ -112,3 +118,45 @@ async def test_link_memory_entity_is_idempotent(pool: asyncpg.Pool) -> None:
             entity.id,
         )
     assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_link_relation_provenance_is_idempotent_and_readable(pool: asyncpg.Pool) -> None:
+    """The Postgres-specific version of
+    test_in_memory_graph_repository.py's equivalent test --
+    relation_provenance.memory_id has a real foreign key to memories(id)."""
+    repository = PostgresGraphRepository(pool)
+    alice = await repository.upsert_entity(
+        NewEntity(namespace="ns", entity_type="Person", name="Alice")
+    )
+    acme = await repository.upsert_entity(
+        NewEntity(namespace="ns", entity_type="Organization", name="Acme")
+    )
+    relation = (
+        await repository.create_relation(
+            NewRelation(
+                namespace="ns",
+                subject_entity_id=alice.id,
+                predicate="works_at",
+                object_entity_id=acme.id,
+            )
+        )
+    ).new
+
+    async with pool.acquire() as conn:
+        memory_id_1 = await conn.fetchval(
+            "INSERT INTO memories (namespace, content, source) "
+            "VALUES ('ns', 'first episode', 'test') RETURNING id"
+        )
+        memory_id_2 = await conn.fetchval(
+            "INSERT INTO memories (namespace, content, source) "
+            "VALUES ('ns', 'second episode', 'test') RETURNING id"
+        )
+
+    await repository.link_relation_provenance(relation.id, str(memory_id_1))
+    await repository.link_relation_provenance(relation.id, str(memory_id_2))
+    # Idempotent -- linking the same pair twice is a no-op.
+    await repository.link_relation_provenance(relation.id, str(memory_id_1))
+
+    provenance = await repository.get_relation_provenance("ns", relation.id)
+    assert sorted(provenance) == sorted([str(memory_id_1), str(memory_id_2)])

@@ -75,7 +75,7 @@ async def test_applies_contradiction_rule_across_two_extraction_calls() -> None:
     """The exit criterion's shape, at the pipeline level: two separate
     extraction results, same (subject, predicate), different object —
     the second call's relation must supersede the first's."""
-    graph = InMemoryGraphRepository(contradiction_confidence_floor=0.5)
+    graph = InMemoryGraphRepository()
     first_result = ExtractionResult(
         relations=[
             ExtractedRelation(
