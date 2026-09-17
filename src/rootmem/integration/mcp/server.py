@@ -19,18 +19,27 @@ Phase 0 plan calls for, without this module reimplementing it.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 
-from rootmem.config import get_settings
+from rootmem.config import Settings, get_settings
 from rootmem.embedding.protocols import EmbeddingProvider
-from rootmem.embedding.voyage import VoyageEmbeddingProvider
-from rootmem.extraction.anthropic_provider import AnthropicExtractionProvider
+from rootmem.extraction.models import ExtractionContext, ExtractionResult
 from rootmem.extraction.protocols import ExtractionProvider
+
+# `voyageai`/`anthropic` are deliberately NOT imported at module level: a real
+# run on this machine measured `import voyageai` alone taking ~12s (the
+# first import in-process to pull in the httpx/httpcore/certifi chain pays
+# some OS-level one-time cost here — see `_LazyEmbeddingProvider` below).
+# Importing them at module level would pay that cost before the MCP server
+# even starts listening for the handshake, which is the bug being fixed.
+if TYPE_CHECKING:
+    from rootmem.embedding.voyage import VoyageEmbeddingProvider
+    from rootmem.extraction.anthropic_provider import AnthropicExtractionProvider
 from rootmem.integration.mcp.schemas import (
     ForgetParams,
     ForgetResult,
@@ -206,10 +215,76 @@ def build_server(
     return server
 
 
+def _import_and_construct_voyage_provider(settings: Settings) -> VoyageEmbeddingProvider:
+    # The slow `import voyageai` (see module docstring note above) happens
+    # here, inside the background thread, on first call only — not at
+    # module load time.
+    from rootmem.embedding.voyage import VoyageEmbeddingProvider
+
+    return VoyageEmbeddingProvider(settings)
+
+
+def _import_and_construct_anthropic_provider(settings: Settings) -> AnthropicExtractionProvider:
+    from rootmem.extraction.anthropic_provider import AnthropicExtractionProvider
+
+    return AnthropicExtractionProvider(settings)
+
+
+class _LazyEmbeddingProvider:
+    """Defers the `voyageai` import and `VoyageEmbeddingProvider`
+    construction to a background thread.
+
+    A real run on this machine measured ~12s for `import voyageai` alone
+    (an OS-level, one-time-per-process cost on the first import that pulls
+    in the httpx/httpcore/certifi chain — not a network call) plus more for
+    constructing the client. Done eagerly in `main_async`, that pushed total
+    server startup past MCP clients' ~30s connection timeout, surfacing as
+    "Connection closed"/"Failed" with the server never even completing the
+    MCP handshake. Starting the import+construction in a thread (so it
+    doesn't block the event loop) as early as possible in `main_async`, then
+    awaiting it only when a tool actually calls `embed`, lets
+    `run_stdio_async()` start accepting the handshake immediately; only the
+    *first* real embedding call pays the one-time cost, exactly like
+    `EmbeddingError` degradation already accepts a slow/unreliable embedding
+    path without failing the surrounding operation.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self._task: asyncio.Task[VoyageEmbeddingProvider] = asyncio.create_task(
+            asyncio.to_thread(_import_and_construct_voyage_provider, settings)
+        )
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        provider = await self._task
+        return await provider.embed(texts)
+
+
+class _LazyExtractionProvider:
+    """Same rationale and mechanism as `_LazyEmbeddingProvider`, for
+    `AnthropicExtractionProvider` (`import anthropic` is fast once
+    `voyageai` has already paid the shared httpx/certifi one-time cost in
+    the same process, but is not guaranteed to run second, so it gets the
+    same treatment)."""
+
+    def __init__(self, settings: Settings) -> None:
+        self._task: asyncio.Task[AnthropicExtractionProvider] = asyncio.create_task(
+            asyncio.to_thread(_import_and_construct_anthropic_provider, settings)
+        )
+
+    async def extract(self, text: str, context: ExtractionContext) -> ExtractionResult:
+        provider = await self._task
+        return await provider.extract(text, context)
+
+
 async def main_async() -> None:
     settings = get_settings()
     configure_logging(settings.rootmem_log_level)
     logger = get_logger()
+
+    # Started before `create_pool` is awaited (not after) so their background
+    # threads run concurrently with that network wait, not sequentially after it.
+    embedding_provider: EmbeddingProvider = _LazyEmbeddingProvider(settings)
+    extraction_provider: ExtractionProvider = _LazyExtractionProvider(settings)
 
     pool = await create_pool(settings)
     try:
@@ -217,8 +292,6 @@ async def main_async() -> None:
             pool, settings.hybrid_search_weight_text, settings.hybrid_search_weight_vector
         )
         graph_repository = PostgresGraphRepository(pool, settings.contradiction_confidence_floor)
-        embedding_provider = VoyageEmbeddingProvider(settings)
-        extraction_provider = AnthropicExtractionProvider(settings)
         server = build_server(repository, graph_repository, embedding_provider, extraction_provider)
         logger.info("rootmem MCP server starting (stdio transport)")
         await server.run_stdio_async()
