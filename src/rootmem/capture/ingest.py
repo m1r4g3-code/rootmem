@@ -34,11 +34,14 @@ async def ingest_transcript(
     content: str,
     source: str,
     source_session_id: str | None = None,
+    importance_flag: float = 0.0,
 ) -> IngestResult:
     """Embed and store `content` as a memory, then extract entities/relations
     from it into the graph. Both the embedding call and the extraction call
     degrade gracefully on failure (NFR2, docs/requirements/phase1-requirements.md)
-    — an external-API outage never blocks the memory from being stored."""
+    — an external-API outage never blocks the memory from being stored.
+    `importance_flag` (Phase 2, FR1) is a cheap, optional input to salience
+    scoring, applied at consolidation time, not here."""
     embedding = await embed_or_none(embedding_provider, content)
 
     memory = await memory_repository.create(
@@ -48,6 +51,7 @@ async def ingest_transcript(
             content_embedding=embedding,
             source=source,
             source_session_id=source_session_id,
+            importance_flag=importance_flag,
         )
     )
 
@@ -71,7 +75,7 @@ async def ingest_transcript(
         )
 
     apply_result = await apply_extraction(
-        graph_repository, namespace, extraction_result, source_memory_id=memory.id
+        graph_repository, namespace, extraction_result, source_memory_ids=[memory.id]
     )
 
     superseded_count = sum(

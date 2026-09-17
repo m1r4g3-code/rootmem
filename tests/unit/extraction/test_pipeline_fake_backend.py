@@ -124,8 +124,37 @@ async def test_links_all_resolved_entities_to_source_memory() -> None:
         ]
     )
 
-    await apply_extraction(graph, "ns", result, source_memory_id="mem-1")
+    await apply_extraction(graph, "ns", result, source_memory_ids=["mem-1"])
 
     alice = await graph.find_entity_by_name("ns", "Person", "Alice")
     assert alice is not None
     assert ("mem-1", alice.id) in graph.memory_entity_links
+
+
+@pytest.mark.asyncio
+async def test_multiple_source_ids_link_provenance_to_all_and_set_no_single_source() -> None:
+    """The distillation case (Phase 2, ADR 0016): several source episodes,
+    no single "the" source -- relation_provenance carries every id,
+    source_memory_id stays None."""
+    graph = InMemoryGraphRepository()
+    result = ExtractionResult(
+        relations=[
+            ExtractedRelation(
+                subject_name="Alice",
+                subject_type="Person",
+                predicate="works_at",
+                object_name="Acme Corp",
+                object_type="Organization",
+            )
+        ]
+    )
+
+    apply_result = await apply_extraction(
+        graph, "ns", result, source_memory_ids=["mem-1", "mem-2", "mem-3"], derivation="distilled"
+    )
+
+    relation_id = apply_result.resolutions[0].new.id
+    assert apply_result.resolutions[0].new.source_memory_id is None
+    assert apply_result.resolutions[0].new.derivation == "distilled"
+    provenance = await graph.get_relation_provenance("ns", relation_id)
+    assert sorted(provenance) == ["mem-1", "mem-2", "mem-3"]
