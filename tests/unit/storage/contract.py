@@ -13,6 +13,8 @@ subclasses that provide a `repository` fixture.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from rootmem.storage.models import MemoryUpdate, NewMemory
@@ -97,9 +99,7 @@ class MemoryRepositoryContract:
         assert second.id == first.id
         assert second.content == "first write"
 
-    async def test_idempotency_key_scoped_per_namespace(
-        self, repository: MemoryRepository
-    ) -> None:
+    async def test_idempotency_key_scoped_per_namespace(self, repository: MemoryRepository) -> None:
         a = await repository.create(
             NewMemory(namespace="ns-a", content="in a", source="test", idempotency_key="same-key")
         )
@@ -158,15 +158,11 @@ class MemoryRepositoryContract:
         assert second.deleted_at == first.deleted_at
         assert second.deleted_reason == "first"
 
-    async def test_soft_delete_missing_raises_not_found(
-        self, repository: MemoryRepository
-    ) -> None:
+    async def test_soft_delete_missing_raises_not_found(self, repository: MemoryRepository) -> None:
         with pytest.raises(NotFoundError):
             await repository.soft_delete("does-not-exist", reason=None)
 
-    async def test_search_text_finds_matching_content(
-        self, repository: MemoryRepository
-    ) -> None:
+    async def test_search_text_finds_matching_content(self, repository: MemoryRepository) -> None:
         await repository.create(
             NewMemory(namespace="ns", content="the quick brown fox", source="test")
         )
@@ -299,3 +295,79 @@ class MemoryRepositoryContract:
         results = await repository.search_hybrid("ns", "nomatch", _unit_vector(0), limit=10)
 
         assert results == []
+
+    async def test_count_unconsolidated_counts_only_unmarked_active_memories(
+        self, repository: MemoryRepository
+    ) -> None:
+        await repository.create(NewMemory(namespace="ns", content="a", source="test"))
+        await repository.create(NewMemory(namespace="ns", content="b", source="test"))
+        deleted = await repository.create(NewMemory(namespace="ns", content="c", source="test"))
+        await repository.soft_delete(deleted.id, reason=None)
+
+        assert await repository.count_unconsolidated("ns") == 2
+        assert await repository.count_unconsolidated("ns-other") == 0
+
+    async def test_list_unconsolidated_respects_limit_and_oldest_first(
+        self, repository: MemoryRepository
+    ) -> None:
+        first = await repository.create(NewMemory(namespace="ns", content="first", source="test"))
+        await repository.create(NewMemory(namespace="ns", content="second", source="test"))
+
+        results = await repository.list_unconsolidated("ns", limit=1)
+
+        assert len(results) == 1
+        assert results[0].id == first.id
+
+    async def test_mark_consolidated_excludes_from_list_unconsolidated(
+        self, repository: MemoryRepository
+    ) -> None:
+        created = await repository.create(NewMemory(namespace="ns", content="a", source="test"))
+
+        await repository.mark_consolidated([created.id], datetime.now(UTC))
+
+        assert await repository.count_unconsolidated("ns") == 0
+        fetched = await repository.get_by_id("ns", created.id)
+        assert fetched is not None
+        assert fetched.consolidated_at is not None
+
+    async def test_update_salience_persists_score(self, repository: MemoryRepository) -> None:
+        created = await repository.create(NewMemory(namespace="ns", content="a", source="test"))
+        assert created.salience_score is None
+
+        await repository.update_salience(created.id, 0.75)
+
+        fetched = await repository.get_by_id("ns", created.id)
+        assert fetched is not None
+        assert fetched.salience_score == pytest.approx(0.75)
+
+    async def test_find_similar_pairs_finds_matches_above_threshold(
+        self, repository: MemoryRepository
+    ) -> None:
+        a = await repository.create(
+            NewMemory(namespace="ns", content="a", source="test", content_embedding=_unit_vector(0))
+        )
+        b = await repository.create(
+            NewMemory(namespace="ns", content="b", source="test", content_embedding=_unit_vector(0))
+        )
+        c = await repository.create(
+            NewMemory(namespace="ns", content="c", source="test", content_embedding=_unit_vector(1))
+        )
+
+        pairs = await repository.find_similar_pairs("ns", [a.id, b.id, c.id], threshold=0.99)
+
+        matched_ids = {frozenset((x, y)) for x, y, _ in pairs}
+        assert frozenset((a.id, b.id)) in matched_ids
+        assert frozenset((a.id, c.id)) not in matched_ids
+        assert frozenset((b.id, c.id)) not in matched_ids
+
+    async def test_find_similar_pairs_excludes_records_without_embedding(
+        self, repository: MemoryRepository
+    ) -> None:
+        a = await repository.create(
+            NewMemory(namespace="ns", content="a", source="test", content_embedding=_unit_vector(0))
+        )
+        b = await repository.create(NewMemory(namespace="ns", content="b", source="test"))
+
+        pairs = await repository.find_similar_pairs("ns", [a.id, b.id], threshold=0.0)
+
+        assert pairs == []

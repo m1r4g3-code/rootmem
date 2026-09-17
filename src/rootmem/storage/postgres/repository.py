@@ -5,6 +5,7 @@ against the same contract-test suite for behavioral parity."""
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Any
 
 import asyncpg
@@ -14,8 +15,8 @@ from rootmem.storage.protocols import NotFoundError, StorageError
 
 _SELECT_COLUMNS = (
     "id, schema_version, namespace, key, idempotency_key, content, content_embedding, "
-    "source, source_session_id, confidence, metadata, created_at, updated_at, "
-    "deleted_at, deleted_reason"
+    "source, source_session_id, confidence, importance_flag, salience_score, consolidated_at, "
+    "metadata, created_at, updated_at, deleted_at, deleted_reason"
 )
 
 
@@ -49,6 +50,9 @@ def _row_to_record(row: asyncpg.Record) -> MemoryRecord:
         source=row["source"],
         source_session_id=row["source_session_id"],
         confidence=row["confidence"],
+        importance_flag=row["importance_flag"],
+        salience_score=row["salience_score"],
+        consolidated_at=row["consolidated_at"],
         metadata=row["metadata"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -72,8 +76,8 @@ class PostgresMemoryRepository:
                     f"""
                     INSERT INTO memories
                         (namespace, key, idempotency_key, content, content_embedding, source,
-                         source_session_id, confidence, metadata)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                         source_session_id, confidence, importance_flag, metadata)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                     ON CONFLICT (namespace, idempotency_key) WHERE idempotency_key IS NOT NULL
                     DO NOTHING
                     RETURNING {_SELECT_COLUMNS}
@@ -86,6 +90,7 @@ class PostgresMemoryRepository:
                     memory.source,
                     memory.source_session_id,
                     memory.confidence,
+                    memory.importance_flag,
                     memory.metadata,
                 )
                 if row is None:
@@ -306,3 +311,84 @@ class PostgresMemoryRepository:
         except asyncpg.PostgresError as exc:
             raise StorageError(f"failed to hybrid-search memories: {exc}") from exc
         return [SearchResult(record=_row_to_record(row), score=row["score"]) for row in rows]
+
+    async def count_unconsolidated(self, namespace: str) -> int:
+        try:
+            async with self._pool.acquire() as conn:
+                count = await conn.fetchval(
+                    """
+                    SELECT COUNT(*) FROM memories
+                    WHERE namespace = $1 AND deleted_at IS NULL AND consolidated_at IS NULL
+                    """,
+                    namespace,
+                )
+        except asyncpg.PostgresError as exc:
+            raise StorageError(f"failed to count unconsolidated memories: {exc}") from exc
+        return int(count)
+
+    async def list_unconsolidated(self, namespace: str, limit: int) -> list[MemoryRecord]:
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    f"""
+                    SELECT {_SELECT_COLUMNS} FROM memories
+                    WHERE namespace = $1 AND deleted_at IS NULL AND consolidated_at IS NULL
+                    ORDER BY created_at
+                    LIMIT $2
+                    """,
+                    namespace,
+                    limit,
+                )
+        except asyncpg.PostgresError as exc:
+            raise StorageError(f"failed to list unconsolidated memories: {exc}") from exc
+        return [_row_to_record(row) for row in rows]
+
+    async def mark_consolidated(self, memory_ids: list[str], consolidated_at: datetime) -> None:
+        if not memory_ids:
+            return
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE memories SET consolidated_at = $2 WHERE id = ANY($1::uuid[])",
+                    memory_ids,
+                    consolidated_at,
+                )
+        except (asyncpg.PostgresError, ValueError) as exc:
+            raise StorageError(f"failed to mark memories consolidated: {exc}") from exc
+
+    async def update_salience(self, memory_id: str, salience_score: float) -> None:
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE memories SET salience_score = $2 WHERE id = $1",
+                    memory_id,
+                    salience_score,
+                )
+        except (asyncpg.PostgresError, ValueError) as exc:
+            raise StorageError(f"failed to update salience: {exc}") from exc
+
+    async def find_similar_pairs(
+        self, namespace: str, memory_ids: list[str], threshold: float
+    ) -> list[tuple[str, str, float]]:
+        if not memory_ids:
+            return []
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT a.id AS id_a, b.id AS id_b,
+                           1 - (a.content_embedding <=> b.content_embedding) AS similarity
+                    FROM memories a
+                    JOIN memories b ON a.id < b.id
+                    WHERE a.namespace = $1 AND b.namespace = $1
+                      AND a.id = ANY($2::uuid[]) AND b.id = ANY($2::uuid[])
+                      AND a.content_embedding IS NOT NULL AND b.content_embedding IS NOT NULL
+                      AND 1 - (a.content_embedding <=> b.content_embedding) >= $3
+                    """,
+                    namespace,
+                    memory_ids,
+                    threshold,
+                )
+        except (asyncpg.PostgresError, ValueError) as exc:
+            raise StorageError(f"failed to find similar memory pairs: {exc}") from exc
+        return [(str(row["id_a"]), str(row["id_b"]), row["similarity"]) for row in rows]

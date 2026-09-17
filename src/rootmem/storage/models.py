@@ -40,6 +40,14 @@ class MemoryRecord(BaseModel):
     source_session_id: str | None = None
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
+    # Phase 2 consolidation (ADR 0016). `importance_flag` is agent-supplied
+    # at write time; `salience_score` is None until a consolidation pass has
+    # actually scored this episode (a normal, expected state, not an error);
+    # `consolidated_at` is None until that pass has processed it.
+    importance_flag: float = Field(default=0.0, ge=0.0, le=1.0)
+    salience_score: float | None = None
+    consolidated_at: datetime | None = None
+
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     created_at: datetime
@@ -71,6 +79,7 @@ class NewMemory(BaseModel):
     source: str
     source_session_id: str | None = None
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    importance_flag: float = Field(default=0.0, ge=0.0, le=1.0)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -9,6 +9,7 @@ parity.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
 from rootmem.storage.models import MemoryRecord, MemoryUpdate, NewMemory, SearchResult
@@ -109,4 +110,39 @@ class MemoryRepository(Protocol):
         formula. Records with no embedding fall back to a pure text-rank
         contribution (weight_vector's term is 0), so they aren't silently
         excluded just because they predate embedding population."""
+        ...
+
+    async def count_unconsolidated(self, namespace: str) -> int:
+        """Count non-deleted memories with `consolidated_at IS NULL` in this
+        namespace — the input `consolidation.trigger.should_consolidate`
+        (ADR 0016) checks against `consolidation_episode_threshold`."""
+        ...
+
+    async def list_unconsolidated(self, namespace: str, limit: int) -> list[MemoryRecord]:
+        """Return up to `limit` non-deleted, not-yet-consolidated memories in
+        this namespace, oldest first — the batch `consolidation.distill`
+        processes in one pass (bounded by `consolidation_batch_size`)."""
+        ...
+
+    async def mark_consolidated(self, memory_ids: list[str], consolidated_at: datetime) -> None:
+        """Set `consolidated_at` on every id in `memory_ids` — idempotent,
+        re-marking an already-consolidated memory is a no-op observably (the
+        timestamp is simply overwritten with the same intent, not an error)."""
+        ...
+
+    async def update_salience(self, memory_id: str, salience_score: float) -> None:
+        """Persist a computed `salience_score` (ADR 0016/
+        docs/math-spec/phase2-math-spec.md) for `memory_id`."""
+        ...
+
+    async def find_similar_pairs(
+        self, namespace: str, memory_ids: list[str], threshold: float
+    ) -> list[tuple[str, str, float]]:
+        """Return every pair `(id_a, id_b, cosine_similarity)` among
+        `memory_ids` (restricted to those with a populated
+        `content_embedding`) whose cosine similarity meets or exceeds
+        `threshold` — the SQL half of similarity-threshold union-find
+        clustering (ADR 0015) and the shared input to salience's
+        `novelty`/`repetition` terms (ADR 0016). One pgvector self-join
+        serves both purposes, not two separate passes."""
         ...

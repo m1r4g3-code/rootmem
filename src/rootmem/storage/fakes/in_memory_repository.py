@@ -40,6 +40,7 @@ class InMemoryMemoryRepository:
             source=memory.source,
             source_session_id=memory.source_session_id,
             confidence=memory.confidence,
+            importance_flag=memory.importance_flag,
             metadata=memory.metadata,
             created_at=now,
             updated_at=now,
@@ -167,6 +168,59 @@ class InMemoryMemoryRepository:
 
         results.sort(key=lambda r: r.score, reverse=True)
         return results[:limit]
+
+    async def count_unconsolidated(self, namespace: str) -> int:
+        return sum(
+            1
+            for record in self._records.values()
+            if record.namespace == namespace
+            and not record.is_deleted
+            and record.consolidated_at is None
+        )
+
+    async def list_unconsolidated(self, namespace: str, limit: int) -> list[MemoryRecord]:
+        candidates = [
+            record
+            for record in self._records.values()
+            if record.namespace == namespace
+            and not record.is_deleted
+            and record.consolidated_at is None
+        ]
+        candidates.sort(key=lambda r: r.created_at)
+        return candidates[:limit]
+
+    async def mark_consolidated(self, memory_ids: list[str], consolidated_at: datetime) -> None:
+        for memory_id in memory_ids:
+            record = self._records.get(memory_id)
+            if record is not None:
+                self._records[memory_id] = record.model_copy(
+                    update={"consolidated_at": consolidated_at}
+                )
+
+    async def update_salience(self, memory_id: str, salience_score: float) -> None:
+        record = self._records.get(memory_id)
+        if record is not None:
+            self._records[memory_id] = record.model_copy(update={"salience_score": salience_score})
+
+    async def find_similar_pairs(
+        self, namespace: str, memory_ids: list[str], threshold: float
+    ) -> list[tuple[str, str, float]]:
+        candidates = [
+            self._records[mid]
+            for mid in memory_ids
+            if mid in self._records
+            and self._records[mid].namespace == namespace
+            and self._records[mid].content_embedding is not None
+        ]
+        pairs: list[tuple[str, str, float]] = []
+        for i, a in enumerate(candidates):
+            for b in candidates[i + 1 :]:
+                assert a.content_embedding is not None
+                assert b.content_embedding is not None
+                similarity = cosine_similarity(a.content_embedding, b.content_embedding)
+                if similarity >= threshold:
+                    pairs.append((a.id, b.id, similarity))
+        return pairs
 
     def _find_by_idempotency_key(self, namespace: str, idempotency_key: str) -> MemoryRecord | None:
         for record in self._records.values():
