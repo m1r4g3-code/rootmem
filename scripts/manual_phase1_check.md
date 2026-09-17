@@ -4,9 +4,12 @@ This is the human-observed companion to the automated proof in
 `tests/integration/test_phase1_exit_criterion.py` — mirroring Phase 0's
 `manual_recall_check.md` dual-signoff ritual before tagging.
 
-**Status: automated proof complete and passing; manual dogfooding pass not
-yet run.** See the note at the bottom on why this is lower-stakes than
-Phase 0's manual check was.
+**Status: automated proof complete and passing; manual dogfooding pass
+executed 2026-09-17 through a live Claude Code session — all 5 items
+passed.** See the note at the bottom on why this is lower-stakes than
+Phase 0's manual check was — though it earned its place regardless (see
+Result log: it caught a real MCP server startup-latency bug the automated
+suite could not have).
 
 ## Prerequisites
 
@@ -23,33 +26,61 @@ Phase 0's manual check was.
 
 ## Checklist
 
-- [ ] **`ingest_session` — capture + extract**: ask the agent to ingest a
+- [x] **`ingest_session` — capture + extract**: ask the agent to ingest a
       transcript containing a checkable fact (e.g. "ingest this: Alice
       works at Acme Corp"). Confirm it calls `ingest_session` (not
       `remember`) and reports `relations_extracted >= 1`.
 
-- [ ] **Contradiction**: ask it to ingest a second, contradicting
+- [x] **Contradiction**: ask it to ingest a second, contradicting
       transcript ("ingest this: Alice joined Globex as an engineer").
       Confirm the tool response shows `superseded_count: 1`.
 
-- [ ] **`related`**: ask the agent what it knows about Alice's employment
+- [x] **`related`**: ask the agent what it knows about Alice's employment
       history. Confirm it calls `related` (or you ask it to explicitly) and
       the response includes both the Acme and Globex relations, with the
       Acme one showing a non-null `valid_to`.
 
-- [ ] **Semantic search**: ask a question with no lexical overlap with any
+- [x] **Semantic search**: ask a question with no lexical overlap with any
       stored fact (e.g. "who does Alice work for currently" if the exact
       word "employ" was never used). Confirm `search` is called and
       returns the right memory.
 
-- [ ] **Restart, then recall**: fully restart the client, ask it to recall
+- [x] **Restart, then recall**: fully restart the client, ask it to recall
       the Alice facts again — confirms Phase 0's cross-session guarantee
       still holds with Phase 1's schema changes in place.
 
 ## Result log
 
-_(Fill in as each step is actually run — date, exact prompts, actual
-observed output.)_
+**2026-09-17, live Claude Code session, namespace `manual-check-live`:**
+
+1. `ingest_session("Alice works at Acme Corp.")` → `entities_extracted: 2`,
+   `relations_extracted: 1`. First run also surfaced that the MCP server was
+   failing to connect at all (client showed "Connection closed"/"Failed",
+   stuck reconnecting) — root-caused live to a startup-latency bug (eager
+   `VoyageEmbeddingProvider`/`AnthropicExtractionProvider` construction
+   taking 27-57s, past the client's ~30s connection timeout) and fixed
+   before this checklist could even begin (commit `1fcafc1`). Handshake now
+   ~18.7s consistently.
+2. `ingest_session("Alice joined Globex as an engineer.")` →
+   `superseded_count: 1`, `contested_count: 0`. Confirmed.
+3. `related(entity_name="Alice", entity_type="Person")` → both relations
+   returned: Acme relation `is_active: false`, `valid_to` set,
+   `superseded_by` pointing at the Globex relation id; Globex relation
+   `is_active: true`, `valid_to: null`, `supersedes` pointing back. Confirmed.
+4. Independent fact ingested ("The design team painted the breakroom wall a
+   deep shade of teal last weekend.") — first 3 `ingest_session` calls in
+   this session came back `embedded: false` (Voyage's 3-req/min free-tier
+   cap, still cooling down from earlier test runs); retried after ~60s and
+   got `embedded: true`. Query "what color did they use in the shared
+   kitchen area" (zero lexical overlap): `search(mode="text")` → empty
+   results; `search(mode="semantic")` → correctly returned the teal fact
+   (score 0.478). Confirmed — the vector component does real work.
+5. Restarted the Claude Code session, asked "Remind me about Alice's
+   employment" → `related` correctly returned the same two relations in the
+   same state (Globex active, Acme superseded) after reconnecting to the
+   restarted MCP server. Confirmed.
+
+All 5 items passed. Full findings recorded in `docs/retro/phase1-retro.md`.
 
 ---
 
