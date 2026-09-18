@@ -34,6 +34,9 @@ class MemoryView(BaseModel):
     source: str
     source_session_id: str | None
     confidence: float
+    importance_flag: float
+    salience_score: float | None
+    consolidated_at: datetime | None
     metadata: dict[str, Any]
     created_at: datetime
     updated_at: datetime
@@ -48,6 +51,9 @@ class MemoryView(BaseModel):
             source=record.source,
             source_session_id=record.source_session_id,
             confidence=record.confidence,
+            importance_flag=record.importance_flag,
+            salience_score=record.salience_score,
+            consolidated_at=record.consolidated_at,
             metadata=record.metadata,
             created_at=record.created_at,
             updated_at=record.updated_at,
