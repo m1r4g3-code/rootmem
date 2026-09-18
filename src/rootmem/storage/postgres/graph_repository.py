@@ -173,7 +173,8 @@ class PostgresGraphRepository:
                     assert previous is not None
                     updated_row = await conn.fetchrow(
                         f"""
-                        UPDATE relations SET belief_alpha = $2, belief_beta = $3, confidence = $4
+                        UPDATE relations
+                        SET belief_alpha = $2, belief_beta = $3, confidence = $4, derivation = $5
                         WHERE id = $1
                         RETURNING {_RELATION_COLUMNS}
                         """,
@@ -181,6 +182,7 @@ class PostgresGraphRepository:
                         decision.belief_alpha,
                         decision.belief_beta,
                         decision.belief_alpha / (decision.belief_alpha + decision.belief_beta),
+                        decision.derivation,
                     )
                     assert updated_row is not None
                     updated = _row_to_relation(updated_row)

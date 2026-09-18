@@ -85,6 +85,11 @@ class ContradictionDecision:
       insert `new` with the given fresh belief.
     - "corroborate": `new`'s object exactly matches the active relation's —
       no new row; update the *existing* relation's belief in place.
+      `derivation` is upgraded to `"distilled"` if the corroborating
+      evidence itself came from distillation, and left unchanged otherwise
+      — a one-way upgrade (never downgraded back to `"extracted"`), so a
+      relation that has ever been corroborated by a cross-episode
+      distillation pass stays marked as such.
     - "supersede": a genuine contradiction whose posterior clears the
       existing relation's by `supersede_margin` — insert `new` with its own
       belief, supersede the old row exactly as Phase 1's mechanics did.
@@ -96,6 +101,7 @@ class ContradictionDecision:
     action: Literal["create", "corroborate", "supersede", "contest"]
     belief_alpha: float
     belief_beta: float
+    derivation: Literal["extracted", "distilled"]
 
 
 def resolve_contradiction(
@@ -115,7 +121,9 @@ def resolve_contradiction(
             prior_strength=settings.prior_strength,
             supporting=True,
         )
-        return ContradictionDecision(action="create", belief_alpha=alpha, belief_beta=beta)
+        return ContradictionDecision(
+            action="create", belief_alpha=alpha, belief_beta=beta, derivation=derivation
+        )
 
     same_object = (
         previous.object_entity_id == new.object_entity_id
@@ -130,7 +138,16 @@ def resolve_contradiction(
             prior_strength=settings.prior_strength,
             supporting=True,
         )
-        return ContradictionDecision(action="corroborate", belief_alpha=alpha, belief_beta=beta)
+        # One-way upgrade: once corroborated by a distillation pass, a
+        # relation stays marked distilled even if later corroborated again
+        # by an ordinary single-episode extraction.
+        upgraded_derivation = "distilled" if derivation == "distilled" else previous.derivation
+        return ContradictionDecision(
+            action="corroborate",
+            belief_alpha=alpha,
+            belief_beta=beta,
+            derivation=upgraded_derivation,
+        )
 
     # Candidate contradiction: the new relation's own belief is computed
     # fresh (a Beta(1,1) prior plus this one event) -- it does not touch the
@@ -155,8 +172,12 @@ def resolve_contradiction(
     # fresh, uncorroborated fact offers no such resistance; three
     # corroborating restatements do.
     if old_confidence > new_confidence + settings.supersede_margin:
-        return ContradictionDecision(action="contest", belief_alpha=new_alpha, belief_beta=new_beta)
-    return ContradictionDecision(action="supersede", belief_alpha=new_alpha, belief_beta=new_beta)
+        return ContradictionDecision(
+            action="contest", belief_alpha=new_alpha, belief_beta=new_beta, derivation=derivation
+        )
+    return ContradictionDecision(
+        action="supersede", belief_alpha=new_alpha, belief_beta=new_beta, derivation=derivation
+    )
 
 
 def apply_feedback(

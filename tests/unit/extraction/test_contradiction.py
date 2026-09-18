@@ -111,6 +111,31 @@ class TestResolveContradictionCorroboration:
         new_confidence = belief_confidence(decision.belief_alpha, decision.belief_beta)
         assert new_confidence > original_confidence
 
+    def test_corroboration_by_distilled_evidence_upgrades_derivation(self) -> None:
+        previous = _relation(object_entity_id="acme")
+        assert previous.derivation == "extracted"
+        decision = resolve_contradiction(
+            previous, _new_relation(object_entity_id="acme", confidence=0.9), "distilled", _SETTINGS
+        )
+        assert decision.action == "corroborate"
+        assert decision.derivation == "distilled"
+
+    def test_corroboration_by_extracted_evidence_never_downgrades_distilled(self) -> None:
+        previous = _relation(object_entity_id="acme")
+        previous = previous.model_copy(update={"derivation": "distilled"})
+        decision = resolve_contradiction(
+            previous, _new_relation(object_entity_id="acme", confidence=0.9), "extracted", _SETTINGS
+        )
+        assert decision.action == "corroborate"
+        assert decision.derivation == "distilled"
+
+    def test_corroboration_by_extracted_evidence_keeps_extracted(self) -> None:
+        previous = _relation(object_entity_id="acme")
+        decision = resolve_contradiction(
+            previous, _new_relation(object_entity_id="acme", confidence=0.9), "extracted", _SETTINGS
+        )
+        assert decision.derivation == "extracted"
+
     def test_identical_literal_object_also_corroborates(self) -> None:
         previous = _relation(object_entity_id=None, object_literal="blue")
         decision = resolve_contradiction(

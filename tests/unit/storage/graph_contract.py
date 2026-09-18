@@ -333,6 +333,48 @@ class GraphRepositoryContract:
         assert second.corroborated is True
         assert second.new.id == first.new.id
 
+    async def test_corroboration_by_distilled_relation_upgrades_derivation(
+        self, repository: GraphRepository
+    ) -> None:
+        """The gap found while writing the Phase 2 exit-criterion test:
+        ingest_session always extracts per-episode, so a later distillation
+        pass corroborating the same fact must upgrade derivation in place --
+        otherwise "derivation=distilled" could never actually be observed
+        once per-episode extraction has already created the relation."""
+        alice = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Person", name="Alice")
+        )
+        acme = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Organization", name="Acme")
+        )
+
+        extracted = await repository.create_relation(
+            NewRelation(
+                namespace="ns",
+                subject_entity_id=alice.id,
+                predicate="works_at",
+                object_entity_id=acme.id,
+                confidence=0.9,
+                derivation="extracted",
+            )
+        )
+        assert extracted.new.derivation == "extracted"
+
+        distilled = await repository.create_relation(
+            NewRelation(
+                namespace="ns",
+                subject_entity_id=alice.id,
+                predicate="works_at",
+                object_entity_id=acme.id,
+                confidence=0.95,
+                derivation="distilled",
+            )
+        )
+
+        assert distilled.corroborated is True
+        assert distilled.new.id == extracted.new.id
+        assert distilled.new.derivation == "distilled"
+
     # `link_relation_provenance`/`get_relation_provenance` are NOT in this
     # shared contract: the real Postgres implementation enforces a foreign
     # key from relation_provenance.memory_id to memories(id) (mirroring

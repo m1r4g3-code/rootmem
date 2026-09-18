@@ -94,6 +94,7 @@ class InMemoryGraphRepository:
                     "belief_beta": decision.belief_beta,
                     "confidence": decision.belief_alpha
                     / (decision.belief_alpha + decision.belief_beta),
+                    "derivation": decision.derivation,
                 }
             )
             self._relations[updated.id] = updated
