@@ -21,8 +21,8 @@ async def related(graph_repository: GraphRepository, params: RelatedParams) -> R
     relations = await graph_repository.related(
         params.namespace, entity.id, max_hops=params.max_hops
     )
-    return RelatedResult(
-        entity_found=True,
-        entity_id=entity.id,
-        relations=[RelationView.from_record(r) for r in relations],
-    )
+    views = []
+    for r in relations:
+        provenance = await graph_repository.get_relation_provenance(params.namespace, r.id)
+        views.append(RelationView.from_record(r, source_memory_ids=provenance))
+    return RelatedResult(entity_found=True, entity_id=entity.id, relations=views)

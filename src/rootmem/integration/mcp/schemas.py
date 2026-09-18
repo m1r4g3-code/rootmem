@@ -208,9 +208,16 @@ class RelationView(BaseModel):
     supersedes: str | None
     superseded_by: str | None
     derivation: Literal["extracted", "distilled"]
+    # Populated separately from `relation_provenance` (not a RelationRecord
+    # field -- provenance is a join table, one relation can have several
+    # source episodes, especially after distillation). Empty list if the
+    # caller (e.g. `related`) didn't look it up.
+    source_memory_ids: list[str] = Field(default_factory=list)
 
     @classmethod
-    def from_record(cls, record: RelationRecord) -> RelationView:
+    def from_record(
+        cls, record: RelationRecord, source_memory_ids: list[str] | None = None
+    ) -> RelationView:
         return cls(
             id=record.id,
             subject_entity_id=record.subject_entity_id,
@@ -227,6 +234,7 @@ class RelationView(BaseModel):
             supersedes=record.supersedes,
             superseded_by=record.superseded_by,
             derivation=record.derivation,
+            source_memory_ids=source_memory_ids or [],
         )
 
 
