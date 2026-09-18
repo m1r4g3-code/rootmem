@@ -64,6 +64,9 @@ class RememberParams(BaseModel):
     source: str
     source_session_id: str | None = None
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    # Phase 2 (FR1, ADR 0016): a cheap, optional input to salience scoring,
+    # applied at consolidation time -- no effect on remember's own latency.
+    importance_flag: float = Field(default=0.0, ge=0.0, le=1.0)
     metadata: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: str | None = None
 
@@ -196,12 +199,15 @@ class RelationView(BaseModel):
     object_entity_id: str | None
     object_literal: str | None
     confidence: float
+    belief_alpha: float
+    belief_beta: float
     valid_from: datetime
     valid_to: datetime | None
     is_active: bool
     is_contested: bool
     supersedes: str | None
     superseded_by: str | None
+    derivation: Literal["extracted", "distilled"]
 
     @classmethod
     def from_record(cls, record: RelationRecord) -> RelationView:
@@ -212,12 +218,15 @@ class RelationView(BaseModel):
             object_entity_id=record.object_entity_id,
             object_literal=record.object_literal,
             confidence=record.confidence,
+            belief_alpha=record.belief_alpha,
+            belief_beta=record.belief_beta,
             valid_from=record.valid_from,
             valid_to=record.valid_to,
             is_active=record.is_active,
             is_contested=record.is_contested,
             supersedes=record.supersedes,
             superseded_by=record.superseded_by,
+            derivation=record.derivation,
         )
 
 
@@ -235,6 +244,7 @@ class IngestSessionParams(BaseModel):
     source: str
     namespace: str = "default"
     session_id: str | None = None
+    importance_flag: float = Field(default=0.0, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def _validate(self) -> IngestSessionParams:
@@ -255,3 +265,39 @@ class IngestSessionResult(BaseModel):
     @classmethod
     def from_ingest_result(cls, result: IngestResult) -> IngestSessionResult:
         return cls(**result.model_dump())
+
+
+# --- consolidate --------------------------------------------------------------
+
+
+class ConsolidateParams(BaseModel):
+    namespace: str = "default"
+    force: bool = False
+
+
+class ConsolidateResult(BaseModel):
+    ran: bool
+    trigger_reason: Literal["count", "time", "manual"] | None = None
+    episodes_processed: int = 0
+    clusters_formed: int = 0
+    facts_distilled: int = 0
+
+
+# --- feedback -------------------------------------------------------------------
+
+
+class FeedbackParams(BaseModel):
+    relation_id: str
+    namespace: str = "default"
+    outcome: Literal["confirmed", "contradicted"]
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def _validate(self) -> FeedbackParams:
+        _reject_blank(self.relation_id, "relation_id")
+        return self
+
+
+class FeedbackResult(BaseModel):
+    relation: RelationView

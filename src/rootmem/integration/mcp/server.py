@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 
 from rootmem.config import Settings, get_settings
+from rootmem.consolidation.protocols import DistillationContext, DistillationProvider
 from rootmem.embedding.protocols import EmbeddingProvider
 from rootmem.extraction.contradiction import BayesianSettings
 from rootmem.extraction.models import ExtractionContext, ExtractionResult
@@ -39,9 +40,16 @@ from rootmem.extraction.protocols import ExtractionProvider
 # Importing them at module level would pay that cost before the MCP server
 # even starts listening for the handshake, which is the bug being fixed.
 if TYPE_CHECKING:
+    from rootmem.consolidation.anthropic_distillation_provider import (
+        AnthropicDistillationProvider,
+    )
     from rootmem.embedding.voyage import VoyageEmbeddingProvider
     from rootmem.extraction.anthropic_provider import AnthropicExtractionProvider
 from rootmem.integration.mcp.schemas import (
+    ConsolidateParams,
+    ConsolidateResult,
+    FeedbackParams,
+    FeedbackResult,
     ForgetParams,
     ForgetResult,
     IngestSessionParams,
@@ -57,6 +65,8 @@ from rootmem.integration.mcp.schemas import (
     UpdateParams,
     UpdateResult,
 )
+from rootmem.integration.mcp.tools.consolidate import consolidate as consolidate_impl
+from rootmem.integration.mcp.tools.feedback import feedback as feedback_impl
 from rootmem.integration.mcp.tools.forget import forget as forget_impl
 from rootmem.integration.mcp.tools.ingest_session import ingest_session as ingest_session_impl
 from rootmem.integration.mcp.tools.recall import recall as recall_impl
@@ -65,8 +75,10 @@ from rootmem.integration.mcp.tools.remember import remember as remember_impl
 from rootmem.integration.mcp.tools.search import search as search_impl
 from rootmem.integration.mcp.tools.update import update as update_impl
 from rootmem.logging import configure_logging, get_logger
+from rootmem.storage.consolidation_protocols import ConsolidationRepository
 from rootmem.storage.graph_protocols import GraphRepository
 from rootmem.storage.postgres.connection import create_pool
+from rootmem.storage.postgres.consolidation_repository import PostgresConsolidationRepository
 from rootmem.storage.postgres.graph_repository import PostgresGraphRepository
 from rootmem.storage.postgres.repository import PostgresMemoryRepository
 from rootmem.storage.protocols import MemoryRepository, NotFoundError
@@ -85,8 +97,16 @@ def build_server(
     graph_repository: GraphRepository,
     embedding_provider: EmbeddingProvider,
     extraction_provider: ExtractionProvider,
+    consolidation_repository: ConsolidationRepository,
+    distillation_provider: DistillationProvider,
+    settings: Settings,
 ) -> MCPServer:
     server = MCPServer(name="rootmem")
+    # Held so a fire-and-forget asyncio.Task isn't garbage-collected mid-
+    # flight (a real, documented asyncio pitfall) -- discarded on completion
+    # via the done_callback below. See NFR10, docs/requirements/
+    # phase2-requirements.md.
+    background_tasks: set[asyncio.Task[None]] = set()
 
     @server.tool()
     async def remember(
@@ -96,12 +116,14 @@ def build_server(
         key: str | None = None,
         source_session_id: str | None = None,
         confidence: float = 1.0,
+        importance_flag: float = 0.0,
         metadata: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> RememberResult:
         """Persist a new memory. If `idempotency_key` collides with an existing,
         non-deleted memory in the same namespace, returns that memory instead
-        of creating a duplicate."""
+        of creating a duplicate. `importance_flag` (0-1) is a cheap, optional
+        input to salience scoring, applied later during consolidation."""
         params = _validated(
             RememberParams,
             content=content,
@@ -110,6 +132,7 @@ def build_server(
             key=key,
             source_session_id=source_session_id,
             confidence=confidence,
+            importance_flag=importance_flag,
             metadata=metadata or {},
             idempotency_key=idempotency_key,
         )
@@ -198,20 +221,91 @@ def build_server(
         source: str,
         namespace: str = "default",
         session_id: str | None = None,
+        importance_flag: float = 0.0,
     ) -> IngestSessionResult:
         """Embed and store `transcript` as a memory, then extract entities/
         relations from it into the graph. Both embedding and extraction
-        degrade gracefully on failure rather than blocking the write."""
+        degrade gracefully on failure rather than blocking the write.
+        `importance_flag` (0-1) is a cheap, optional input to salience
+        scoring, applied later during consolidation."""
         params = _validated(
             IngestSessionParams,
             transcript=transcript,
             source=source,
             namespace=namespace,
             session_id=session_id,
+            importance_flag=importance_flag,
         )
-        return await ingest_session_impl(
+        result = await ingest_session_impl(
             repository, graph_repository, embedding_provider, extraction_provider, params
         )
+
+        # Inline auto-trigger (ADR 0012, FR3): check the consolidation
+        # trigger and, if met, run it in the background -- never blocking
+        # ingest_session's own return on a potentially-slow pass. A failure
+        # here is a background-task concern, not this call's: log and move
+        # on, never let it surface as ingest_session's own error.
+        async def _maybe_consolidate() -> None:
+            from rootmem.consolidation.distill import maybe_run_consolidation
+
+            try:
+                await maybe_run_consolidation(
+                    repository,
+                    graph_repository,
+                    consolidation_repository,
+                    distillation_provider,
+                    namespace,
+                    settings,
+                )
+            except Exception as exc:  # noqa: BLE001 - background task, must never crash the server
+                get_logger().warning(
+                    "operation=consolidate_auto_trigger outcome=error error=%s", exc
+                )
+
+        task = asyncio.create_task(_maybe_consolidate())
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+
+        return result
+
+    @server.tool()
+    async def consolidate(namespace: str = "default", force: bool = False) -> ConsolidateResult:
+        """Run one consolidation pass on demand: checks the trigger
+        condition (episode count or time elapsed) unless `force=True`
+        bypasses it, and no-ops cleanly (`ran: false`) when unmet."""
+        params = _validated(ConsolidateParams, namespace=namespace, force=force)
+        return await consolidate_impl(
+            repository,
+            graph_repository,
+            consolidation_repository,
+            distillation_provider,
+            settings,
+            params,
+        )
+
+    @server.tool()
+    async def feedback(
+        relation_id: str,
+        outcome: str,
+        namespace: str = "default",
+        confidence: float = 1.0,
+        note: str | None = None,
+    ) -> FeedbackResult:
+        """Report whether a relation turned out to be correct
+        (`outcome="confirmed"`) or wrong (`outcome="contradicted"`) --
+        the retrieval-outcome feedback that updates its Bayesian belief."""
+        params = _validated(
+            FeedbackParams,
+            relation_id=relation_id,
+            outcome=outcome,
+            namespace=namespace,
+            confidence=confidence,
+            note=note,
+        )
+        try:
+            return await feedback_impl(graph_repository, params)
+        except NotFoundError as exc:
+            raise ToolError(str(exc)) from exc
 
     return server
 
@@ -229,6 +323,16 @@ def _import_and_construct_anthropic_provider(settings: Settings) -> AnthropicExt
     from rootmem.extraction.anthropic_provider import AnthropicExtractionProvider
 
     return AnthropicExtractionProvider(settings)
+
+
+def _import_and_construct_distillation_provider(
+    settings: Settings,
+) -> AnthropicDistillationProvider:
+    from rootmem.consolidation.anthropic_distillation_provider import (
+        AnthropicDistillationProvider,
+    )
+
+    return AnthropicDistillationProvider(settings)
 
 
 class _LazyEmbeddingProvider:
@@ -277,6 +381,22 @@ class _LazyExtractionProvider:
         return await provider.extract(text, context)
 
 
+class _LazyDistillationProvider:
+    """Same rationale and mechanism as `_LazyEmbeddingProvider`/
+    `_LazyExtractionProvider`, for `AnthropicDistillationProvider` (also
+    constructs an `anthropic.AsyncAnthropic` client, so it carries the same
+    slow-first-import risk)."""
+
+    def __init__(self, settings: Settings) -> None:
+        self._task: asyncio.Task[AnthropicDistillationProvider] = asyncio.create_task(
+            asyncio.to_thread(_import_and_construct_distillation_provider, settings)
+        )
+
+    async def distill(self, texts: list[str], context: DistillationContext) -> ExtractionResult:
+        provider = await self._task
+        return await provider.distill(texts, context)
+
+
 async def main_async() -> None:
     settings = get_settings()
     configure_logging(settings.rootmem_log_level)
@@ -286,6 +406,7 @@ async def main_async() -> None:
     # threads run concurrently with that network wait, not sequentially after it.
     embedding_provider: EmbeddingProvider = _LazyEmbeddingProvider(settings)
     extraction_provider: ExtractionProvider = _LazyExtractionProvider(settings)
+    distillation_provider: DistillationProvider = _LazyDistillationProvider(settings)
 
     pool = await create_pool(settings)
     try:
@@ -293,7 +414,16 @@ async def main_async() -> None:
             pool, settings.hybrid_search_weight_text, settings.hybrid_search_weight_vector
         )
         graph_repository = PostgresGraphRepository(pool, BayesianSettings.from_settings(settings))
-        server = build_server(repository, graph_repository, embedding_provider, extraction_provider)
+        consolidation_repository = PostgresConsolidationRepository(pool)
+        server = build_server(
+            repository,
+            graph_repository,
+            embedding_provider,
+            extraction_provider,
+            consolidation_repository,
+            distillation_provider,
+            settings,
+        )
         logger.info("rootmem MCP server starting (stdio transport)")
         await server.run_stdio_async()
     finally:

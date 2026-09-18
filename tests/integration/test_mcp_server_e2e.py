@@ -29,7 +29,7 @@ pytestmark = pytest.mark.integration_external
 
 
 @pytest.mark.asyncio
-async def test_lists_all_seven_tools(mcp_session: ClientSession) -> None:
+async def test_lists_all_nine_tools(mcp_session: ClientSession) -> None:
     result = await mcp_session.list_tools()
     names = {tool.name for tool in result.tools}
     assert names == {
@@ -40,6 +40,8 @@ async def test_lists_all_seven_tools(mcp_session: ClientSession) -> None:
         "search",
         "related",
         "ingest_session",
+        "consolidate",
+        "feedback",
     }
 
 
@@ -117,3 +119,63 @@ async def test_ingest_session_then_related_round_trip(mcp_session: ClientSession
     assert related_result.structured_content is not None
     assert related_result.structured_content["entity_found"] is True
     assert len(related_result.structured_content["relations"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_feedback_confirmed_raises_relation_confidence_round_trip(
+    mcp_session: ClientSession,
+) -> None:
+    """The real end-to-end path for Phase 2's new `feedback` tool: an
+    extracted relation's confidence measurably increases as a direct,
+    observable result of an explicit `confirmed` report."""
+    ingest_result = await mcp_session.call_tool(
+        "ingest_session",
+        {
+            "transcript": "E2eFeedbackPerson works at E2eFeedbackOrg.",
+            "source": "e2e-test",
+            "namespace": "e2e-feedback-test",
+        },
+    )
+    assert isinstance(ingest_result, types.CallToolResult)
+    assert ingest_result.is_error is not True
+
+    related_result = await mcp_session.call_tool(
+        "related",
+        {
+            "entity_name": "E2eFeedbackPerson",
+            "entity_type": "Person",
+            "namespace": "e2e-feedback-test",
+        },
+    )
+    assert related_result.structured_content is not None
+    relations = related_result.structured_content["relations"]
+    assert len(relations) >= 1
+    relation_id = relations[0]["id"]
+    original_confidence = relations[0]["confidence"]
+
+    feedback_result = await mcp_session.call_tool(
+        "feedback",
+        {
+            "relation_id": relation_id,
+            "namespace": "e2e-feedback-test",
+            "outcome": "confirmed",
+            "confidence": 1.0,
+        },
+    )
+    assert isinstance(feedback_result, types.CallToolResult)
+    assert feedback_result.is_error is not True
+    assert feedback_result.structured_content is not None
+    assert feedback_result.structured_content["relation"]["confidence"] > original_confidence
+
+
+@pytest.mark.asyncio
+async def test_consolidate_force_runs_without_error(mcp_session: ClientSession) -> None:
+    result = await mcp_session.call_tool(
+        "consolidate", {"namespace": "e2e-consolidate-test", "force": True}
+    )
+
+    assert isinstance(result, types.CallToolResult)
+    assert result.is_error is not True
+    assert result.structured_content is not None
+    assert result.structured_content["ran"] is True
+    assert result.structured_content["trigger_reason"] == "manual"

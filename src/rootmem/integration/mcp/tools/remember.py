@@ -33,6 +33,7 @@ async def remember(
             source=params.source,
             source_session_id=params.source_session_id,
             confidence=params.confidence,
+            importance_flag=params.importance_flag,
             metadata=params.metadata,
         )
     )

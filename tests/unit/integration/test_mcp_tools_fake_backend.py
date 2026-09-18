@@ -8,9 +8,13 @@ from __future__ import annotations
 
 import pytest
 
+from rootmem.config import Settings
+from rootmem.consolidation.fakes.scripted_distillation_provider import ScriptedDistillationProvider
 from rootmem.extraction.fakes.scripted_provider import ScriptedExtractionProvider
 from rootmem.extraction.models import ExtractedRelation, ExtractionResult
 from rootmem.integration.mcp.schemas import (
+    ConsolidateParams,
+    FeedbackParams,
     ForgetParams,
     IngestSessionParams,
     RecallParams,
@@ -19,6 +23,8 @@ from rootmem.integration.mcp.schemas import (
     SearchParams,
     UpdateParams,
 )
+from rootmem.integration.mcp.tools.consolidate import consolidate
+from rootmem.integration.mcp.tools.feedback import feedback
 from rootmem.integration.mcp.tools.forget import forget
 from rootmem.integration.mcp.tools.ingest_session import ingest_session
 from rootmem.integration.mcp.tools.recall import recall
@@ -26,8 +32,11 @@ from rootmem.integration.mcp.tools.related import related
 from rootmem.integration.mcp.tools.remember import remember
 from rootmem.integration.mcp.tools.search import search
 from rootmem.integration.mcp.tools.update import update
+from rootmem.storage.fakes.in_memory_consolidation_repository import InMemoryConsolidationRepository
 from rootmem.storage.fakes.in_memory_graph_repository import InMemoryGraphRepository
 from rootmem.storage.fakes.in_memory_repository import InMemoryMemoryRepository
+from rootmem.storage.graph_models import NewEntity, NewRelation
+from rootmem.storage.models import NewMemory
 from rootmem.storage.protocols import NotFoundError
 
 
@@ -249,3 +258,82 @@ async def test_ingest_session_stores_memory_and_extracts_graph(
     )
     assert related_result.entity_found is True
     assert len(related_result.relations) == 1
+
+
+async def test_consolidate_force_runs_and_reports_no_facts_without_clusters(
+    repository: InMemoryMemoryRepository,
+) -> None:
+    graph_repository = InMemoryGraphRepository()
+    consolidation_repository = InMemoryConsolidationRepository()
+    distillation_provider = ScriptedDistillationProvider()
+    await repository.create(NewMemory(namespace="default", content="a lone fact", source="test"))
+
+    result = await consolidate(
+        repository,
+        graph_repository,
+        consolidation_repository,
+        distillation_provider,
+        Settings(),
+        ConsolidateParams(force=True),
+    )
+
+    assert result.ran is True
+    assert result.trigger_reason == "manual"
+    assert result.episodes_processed == 1
+    assert result.facts_distilled == 0
+
+
+async def test_consolidate_no_ops_when_trigger_not_met(
+    repository: InMemoryMemoryRepository,
+) -> None:
+    graph_repository = InMemoryGraphRepository()
+    consolidation_repository = InMemoryConsolidationRepository()
+    distillation_provider = ScriptedDistillationProvider()
+    await consolidation_repository.start_run("default", "manual")
+
+    result = await consolidate(
+        repository,
+        graph_repository,
+        consolidation_repository,
+        distillation_provider,
+        Settings(consolidation_episode_threshold=500, consolidation_time_window_hours=24.0),
+        ConsolidateParams(),
+    )
+
+    assert result.ran is False
+
+
+async def test_feedback_confirmed_raises_relation_confidence() -> None:
+    graph_repository = InMemoryGraphRepository()
+    alice = await graph_repository.upsert_entity(
+        NewEntity(namespace="default", entity_type="Person", name="Alice")
+    )
+    acme = await graph_repository.upsert_entity(
+        NewEntity(namespace="default", entity_type="Organization", name="Acme")
+    )
+    resolution = await graph_repository.create_relation(
+        NewRelation(
+            namespace="default",
+            subject_entity_id=alice.id,
+            predicate="works_at",
+            object_entity_id=acme.id,
+            confidence=0.9,
+        )
+    )
+
+    result = await feedback(
+        graph_repository,
+        FeedbackParams(relation_id=resolution.new.id, outcome="confirmed", confidence=1.0),
+    )
+
+    assert result.relation.confidence > resolution.new.confidence
+
+
+async def test_feedback_missing_relation_raises_not_found() -> None:
+    graph_repository = InMemoryGraphRepository()
+
+    with pytest.raises(NotFoundError):
+        await feedback(
+            graph_repository,
+            FeedbackParams(relation_id="00000000-0000-0000-0000-000000000000", outcome="confirmed"),
+        )
