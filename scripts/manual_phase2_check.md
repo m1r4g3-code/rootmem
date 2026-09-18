@@ -4,10 +4,10 @@ This is the human-observed companion to the automated proof in
 `tests/integration/test_phase2_exit_criterion.py` — mirroring Phase 0/1's
 dual-signoff ritual before tagging.
 
-**Status: automated proof complete and passing; manual dogfooding pass
-executed 2026-09-18 — all items but the final cross-session restart
-confirmed live (see Result log).** See the note at the bottom on why this
-is lower-stakes than Phase 0's manual check was, and on what Phase 1's own
+**Status: PASSED.** Automated proof complete and passing; manual dogfooding
+pass executed 2026-09-18 — all 7 items confirmed live, including a full
+client restart (see Result log). See the note at the bottom on why this is
+lower-stakes than Phase 0's manual check was, and on what Phase 1's own
 manual pass found that the automated suite alone would not have (a real MCP
 server startup-latency bug) — the same category of finding this pass exists
 to catch again if it recurs. This run also caught a real (client-side, not
@@ -67,10 +67,9 @@ cache.
       relation is correct (call `feedback` with `outcome="confirmed"`).
       Confirm the returned relation's `confidence` increased.
 
-- [ ] **Restart, then recall**: fully restart the client, ask it about
+- [x] **Restart, then recall**: fully restart the client, ask it about
       Alice again — confirms the cross-session guarantee still holds with
-      Phase 2's schema changes in place. **Not yet run by the human user —
-      requires an actual client restart this session cannot self-trigger.**
+      Phase 2's schema changes in place.
 
 ## Result log
 
@@ -128,11 +127,13 @@ cache.
   outcome="confirmed", confidence=1.0)` → returned relation's `confidence`
   rose from `0.8627` to `0.8904`. **Pass.**
 
-- **Restart, then recall**: not yet performed — needs the human user to
-  actually restart their client. Cross-session persistence itself is
-  unchanged from Phase 0/1's already-proven Postgres-backed guarantee; this
-  step exists to catch client-connection-path surprises specifically (per
-  Phase 1's precedent), not to re-prove storage durability.
+- **Restart, then recall**: user fully restarted their Claude Code session,
+  then asked "What do you know about Alice's employment" in the new
+  session. `related("Alice", "Person")` returned both relations exactly as
+  left before the restart: the Acme relation at `confidence: 0.8904`
+  (the post-`feedback` value), `derivation: "distilled"`, both relations
+  still `is_contested: true`. Full state — belief, derivation, provenance,
+  contested flags — survived the restart intact. **Pass.**
 
 ---
 
