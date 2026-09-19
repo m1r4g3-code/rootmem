@@ -5,16 +5,17 @@
 [![CI](https://github.com/m1r4g3-code/rootmem/actions/workflows/ci.yml/badge.svg)](https://github.com/m1r4g3-code/rootmem/actions/workflows/ci.yml)
 ![Python 3.13](https://img.shields.io/badge/python-3.13-blue)
 ![mypy --strict](https://img.shields.io/badge/mypy-strict-informational)
-![Phase 4](https://img.shields.io/badge/phase-5%20%E2%80%94%20remote%20transport%2C%20identity%20%26%20test%20isolation-success)
+![Phase 4](https://img.shields.io/badge/phase-6%20%E2%80%94%20hardening%2C%20adapters%2C%20evaluation%20%26%20packaging-success)
 
 ROOTMEM gives an AI coding agent (Claude Code, Cursor, or anything else that
 speaks MCP) a real, persistent memory — one that survives process restarts,
 new chats, and new machines, instead of evaporating the moment a context
 window ends. This repository is a **chartered, multi-phase build**, now
-through Phase 5: thirteen MCP tools over a real Postgres store, with a
+through Phase 6: thirteen MCP tools over a real Postgres store, with a
 semantic graph, consolidation into skills and lessons, multi-factor ranking
 with decay and trust, a tamper-evident audit log, and an optional authenticated HTTP transport with
-per-agent identities — each phase proven over
+per-agent identities, scopes, rate limits, a REST facade, namespace
+export/import and a container recipe — each phase proven over
 the actual protocol, not just in unit tests. The sections below describe the
 Phase 0 foundation the later phases build on; see Status for the full arc.
 
@@ -250,12 +251,17 @@ caught before they could ship.
 | 3 | `v0.3.0-phase3` | Procedural memory, failure-to-lesson, SKILL.md |
 | 4 | `v0.4.0-phase4` | Ranking, decay, trust, tamper-evident audit log |
 | 5 | `v0.5.0-phase5` | Streamable-HTTP transport, agent identities and namespace authorization, separate test database |
+| 6 | `v0.6.0-phase6` | Token expiry/rotation, read scope, rate limiting, `/healthz`, REST facade + Python client, namespace export/import, Claude Code API hook, offline retrieval evaluation, Docker packaging |
 
 Each phase has its own research memo, requirements, ADRs, exit-criterion
 test and manual sign-off log under `docs/` and `scripts/`. Ranking weights,
 decay stability and trust reliabilities are provisional defaults, not tuned
 on real usage. Over HTTP the server needs a bearer token from
-`python -m rootmem.identity.cli create`, binds loopback by default and has no
-TLS (put a reverse proxy in front); tokens have no expiry or rotation yet.
+`python -m rootmem.identity.cli create` (optional expiry, `read` scope,
+`rotate`), binds loopback by default and has no TLS (put a reverse proxy in
+front; see [`docs/operations.md`](docs/operations.md)). Rate limiting is
+per server process. The container image and compose file were never built on
+the development machine; only CI verifies them. The retrieval evaluation
+(`docs/benchmarks/phase6-retrieval-eval.md`) is small and synthetic.
 Integration tests run against `<POSTGRES_DB>_test`
 (`python scripts/create_test_db.py`).

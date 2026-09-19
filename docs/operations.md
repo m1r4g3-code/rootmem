@@ -137,6 +137,7 @@ service first. Migrations are forward-only; take a `pg_dump` beforehand.
   here). Never expose port 8765 directly.
 - **Bearer tokens are bearer tokens:** anyone holding one has that identity's
   access until it expires, is rotated or is revoked. Prefer expiry.
+- **A revoked or expired token looks like an OAuth failure in some clients.** ROOTMEM answers 401, and MCP clients that support OAuth respond by trying to log in; the server offers no OAuth endpoints, so they end at "Dynamic Client Registration rejected (HTTP 404)" with an Authenticate button instead of saying the token is dead. Do not press Authenticate: rotate or re-issue the token and update the client's `Authorization` header.
 - **The audit chain detects tampering; it does not prevent it.** A database
   superuser can rewrite the whole chain, and a mutation that succeeds but whose
   audit append fails is reported as an error even though the change applied.

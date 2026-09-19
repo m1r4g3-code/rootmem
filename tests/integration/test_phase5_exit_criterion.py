@@ -51,6 +51,17 @@ _ENV_TO_FORWARD = (
     "ANTHROPIC_API_KEY",
     "SYSTEMROOT",
     "PATH",
+    # The Anthropic SDK resolves the home directory when it builds its client;
+    # without these the extraction provider fails to construct (found in
+    # Phase 6, when the first test called ingest_session over HTTP).
+    "USERPROFILE",
+    "HOME",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "TEMP",
+    "TMP",
 )
 
 
@@ -61,8 +72,9 @@ def _free_port() -> int:
 
 
 class _HttpServer:
-    def __init__(self, port: int) -> None:
+    def __init__(self, port: int, extra_env: dict[str, str] | None = None) -> None:
         self.port = port
+        self._extra_env = extra_env or {}
         self.url = f"http://127.0.0.1:{port}/mcp"
         self._proc: subprocess.Popen[bytes] | None = None
 
@@ -71,11 +83,18 @@ class _HttpServer:
         env["POSTGRES_DB"] = get_settings().postgres_db  # the _test database
         env["ROOTMEM_TRANSPORT"] = "http"
         env["ROOTMEM_HTTP_PORT"] = str(self.port)
+        env.update(self._extra_env)
         self._proc = subprocess.Popen(  # noqa: ASYNC220 - one-off test server launch
             [sys.executable, "-m", "rootmem.integration.mcp.server"],
             env=env,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            # Set ROOTMEM_TEST_SERVER_LOG=<file> to keep the server's log when
+            # diagnosing a failure; discarded otherwise.
+            stderr=(
+                open(os.environ["ROOTMEM_TEST_SERVER_LOG"], "ab")  # noqa: ASYNC230 - one-off test server launch
+                if "ROOTMEM_TEST_SERVER_LOG" in os.environ
+                else subprocess.DEVNULL
+            ),
         )
         async with httpx2.AsyncClient() as client:
             for _ in range(120):

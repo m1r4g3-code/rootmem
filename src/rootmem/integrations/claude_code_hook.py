@@ -25,6 +25,15 @@ from rootmem.client import RootmemClient, RootmemError
 
 DEFAULT_MAX_CHARS = 20_000
 MIN_USEFUL_CHARS = 20
+# ingest_session embeds and runs LLM extraction, which can take well over the
+# client's 30s default (rate-limited embeddings retry with backoff). A hook
+# that gave up early would leave the caller believing the session was lost
+# while the server was still working, so it waits longer.
+HOOK_TIMEOUT_SECONDS = 120.0
+
+
+def _default_client(url: str, token: str) -> RootmemClient:
+    return RootmemClient(url, token, timeout=HOOK_TIMEOUT_SECONDS)
 
 
 def _text_of(content: Any) -> str:
@@ -78,7 +87,7 @@ def transcript_to_text(lines: Iterable[str], max_chars: int = DEFAULT_MAX_CHARS)
 def run(
     stdin: TextIO,
     environ: dict[str, str],
-    client_factory: Callable[[str, str], RootmemClient] = RootmemClient,
+    client_factory: Callable[[str, str], RootmemClient] = _default_client,
     stderr: TextIO = sys.stderr,
 ) -> int:
     url = environ.get("ROOTMEM_URL", "")
