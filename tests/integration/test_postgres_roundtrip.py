@@ -19,6 +19,7 @@ from rootmem.config import get_settings
 from rootmem.storage.models import NewMemory
 from rootmem.storage.postgres.connection import create_pool
 from rootmem.storage.postgres.repository import PostgresMemoryRepository
+from tests.integration.db_guard import truncate
 from tests.unit.storage.contract import MemoryRepositoryContract
 
 
@@ -29,7 +30,7 @@ async def pool() -> AsyncIterator[asyncpg.Pool]:
     async with created_pool.acquire() as conn:
         # CASCADE: relations.source_memory_id references memories (Phase 1,
         # ADR 0006) — a plain TRUNCATE fails once that FK exists.
-        await conn.execute("TRUNCATE memories CASCADE")
+        await truncate(conn, "memories CASCADE")
     try:
         yield created_pool
     finally:

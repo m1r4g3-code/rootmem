@@ -32,15 +32,19 @@ def main() -> None:
     s_cold = stability_days(0, None, PARAMS)
     s_warm = stability_days(5, None, PARAMS)
     print(f"stability: never-accessed={s_cold:.1f}d, 5 accesses={s_warm:.1f}d")
-    print(f"{'age(d)':>7} | {'exp cold':>9} {'exp warm':>9} {'gap':>8} | "
-          f"{'pow cold':>9} {'pow warm':>9} {'gap':>8}")
+    print(
+        f"{'age(d)':>7} | {'exp cold':>9} {'exp warm':>9} {'gap':>8} | "
+        f"{'pow cold':>9} {'pow warm':>9} {'gap':>8}"
+    )
     ordering_ok = True
     for age in AGES_DAYS:
         e_cold, e_warm = exponential(age, s_cold), exponential(age, s_warm)
         p_cold, p_warm = power_law(age, s_cold), power_law(age, s_warm)
         ordering_ok &= e_warm > e_cold and p_warm > p_cold
-        print(f"{age:>7} | {e_cold:9.4f} {e_warm:9.4f} {e_warm - e_cold:8.4f} | "
-              f"{p_cold:9.4f} {p_warm:9.4f} {p_warm - p_cold:8.4f}")
+        print(
+            f"{age:>7} | {e_cold:9.4f} {e_warm:9.4f} {e_warm - e_cold:8.4f} | "
+            f"{p_cold:9.4f} {p_warm:9.4f} {p_warm - p_cold:8.4f}"
+        )
     print(f"reinforcement ordering holds for both families: {ordering_ok}")
 
 

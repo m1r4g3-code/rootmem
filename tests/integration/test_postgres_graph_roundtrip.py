@@ -18,6 +18,7 @@ from rootmem.config import get_settings
 from rootmem.storage.graph_models import NewEntity, NewRelation
 from rootmem.storage.postgres.connection import create_pool
 from rootmem.storage.postgres.graph_repository import PostgresGraphRepository
+from tests.integration.db_guard import truncate
 from tests.unit.storage.graph_contract import GraphRepositoryContract
 
 
@@ -26,7 +27,7 @@ async def pool() -> AsyncIterator[asyncpg.Pool]:
     settings = get_settings()
     created_pool = await create_pool(settings)
     async with created_pool.acquire() as conn:
-        await conn.execute("TRUNCATE relations, memory_entities, entities CASCADE")
+        await truncate(conn, "relations, memory_entities, entities CASCADE")
     try:
         yield created_pool
     finally:

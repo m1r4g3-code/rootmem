@@ -18,6 +18,7 @@ from rootmem.config import get_settings
 from rootmem.storage.postgres.connection import create_pool
 from rootmem.storage.postgres.procedural_repository import PostgresProceduralMemoryRepository
 from rootmem.storage.procedural_protocols import NewProceduralMemory
+from tests.integration.db_guard import truncate
 from tests.unit.storage.procedural_contract import ProceduralMemoryRepositoryContract
 
 
@@ -26,7 +27,7 @@ async def pool() -> AsyncIterator[asyncpg.Pool]:
     settings = get_settings()
     created_pool = await create_pool(settings)
     async with created_pool.acquire() as conn:
-        await conn.execute("TRUNCATE procedural_memory_provenance, procedural_memories CASCADE")
+        await truncate(conn, "procedural_memory_provenance, procedural_memories CASCADE")
     try:
         yield created_pool
     finally:

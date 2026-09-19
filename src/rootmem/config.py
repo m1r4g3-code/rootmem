@@ -7,6 +7,7 @@ rather than surfacing as a mysterious failure deep in a tool call later.
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -29,6 +30,13 @@ class Settings(BaseSettings):
     redis_port: int = Field(default=6379, gt=0, le=65535)
 
     rootmem_default_namespace: str = "default"
+
+    # Phase 5 transport (ADR 0028). stdio stays the default and is unchanged.
+    # http serves stateless streamable HTTP with mandatory bearer auth.
+    rootmem_transport: Literal["stdio", "http"] = "stdio"
+    rootmem_http_host: str = "127.0.0.1"
+    rootmem_http_port: int = Field(default=8765, gt=0, le=65535)
+    rootmem_http_allow_non_loopback: bool = False
     rootmem_log_level: str = "INFO"
 
     # Phase 1 external LLM APIs (ADR 0009). None by default — code paths

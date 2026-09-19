@@ -370,6 +370,18 @@ class PostgresMemoryRepository:
         except (asyncpg.PostgresError, ValueError) as exc:
             raise StorageError(f"failed to mark memories consolidated: {exc}") from exc
 
+    async def namespace_of(self, memory_id: str) -> str | None:
+        if not _is_syntactically_valid_id(memory_id):
+            return None
+        try:
+            async with self._pool.acquire() as conn:
+                value = await conn.fetchval(
+                    "SELECT namespace FROM memories WHERE id = $1", memory_id
+                )
+        except asyncpg.PostgresError as exc:
+            raise StorageError(f"failed to look up memory namespace: {exc}") from exc
+        return str(value) if value is not None else None
+
     async def record_access(self, memory_ids: list[str], accessed_at: datetime) -> None:
         # Ids that aren't even UUID-shaped can never match; ignore them, as
         # the in-memory fake does, rather than fail the whole batch.

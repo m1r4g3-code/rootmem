@@ -19,9 +19,15 @@ Phase 0 plan calls for, without this module reimplementing it.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+import functools
+import inspect
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from mcp.server.auth.middleware.auth_context import get_access_token
+from mcp.server.auth.provider import TokenVerifier
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel
@@ -55,6 +61,10 @@ if TYPE_CHECKING:
     from rootmem.embedding.voyage import VoyageEmbeddingProvider
     from rootmem.extraction.anthropic_provider import AnthropicExtractionProvider
 from rootmem.audit.recorder import AuditRecorder, content_sha256
+from rootmem.identity.authz import AuthorizationError, authorize_namespace
+from rootmem.identity.bind import validate_http_bind
+from rootmem.identity.models import Identity, local_identity
+from rootmem.identity.verifier import RootmemTokenVerifier
 from rootmem.integration.mcp.schemas import (
     ConsolidateParams,
     ConsolidateResult,
@@ -107,6 +117,7 @@ from rootmem.storage.postgres.audit_repository import PostgresAuditLogRepository
 from rootmem.storage.postgres.connection import create_pool
 from rootmem.storage.postgres.consolidation_repository import PostgresConsolidationRepository
 from rootmem.storage.postgres.graph_repository import PostgresGraphRepository
+from rootmem.storage.postgres.identity_repository import PostgresIdentityRepository
 from rootmem.storage.postgres.procedural_repository import PostgresProceduralMemoryRepository
 from rootmem.storage.postgres.repository import PostgresMemoryRepository
 from rootmem.storage.procedural_protocols import ProceduralMemoryRepository
@@ -132,8 +143,70 @@ def build_server(
     procedural_distillation_provider: ProceduralDistillationProvider,
     settings: Settings,
     audit_repository: AuditLogRepository | None = None,
+    token_verifier: TokenVerifier | None = None,
+    auth_settings: AuthSettings | None = None,
 ) -> MCPServer:
-    server = MCPServer(name="rootmem")
+    server = MCPServer(name="rootmem", token_verifier=token_verifier, auth=auth_settings)
+    # Over HTTP a verifier is always present and every call must carry an
+    # identity; stdio has none and resolves to the trusted local identity.
+    require_auth = token_verifier is not None
+    local = local_identity(settings.audit_actor, datetime.now(UTC))
+
+    def resolve_caller() -> Identity:
+        """The authenticated identity for this call (ADR 0029). Fails
+        closed: with auth required and no identity in context, the call is
+        rejected rather than treated as the trusted local caller."""
+        token = get_access_token()
+        if token is None:
+            if require_auth:
+                raise ToolError("authentication required")
+            return local
+        claims = token.claims or {}
+        return Identity(
+            id=str(claims.get("identity_id", token.subject)),
+            name=token.client_id,
+            namespaces=[str(n) for n in claims.get("namespaces", [])],
+            created_at=local.created_at,
+        )
+
+    def authorize(namespace: str) -> None:
+        try:
+            authorize_namespace(resolve_caller(), namespace)
+        except AuthorizationError as exc:
+            raise ToolError(str(exc)) from exc
+
+    async def authorize_memory(memory_id: str) -> None:
+        """`update`/`forget` take only an id: look up its namespace and
+        authorize before mutating. A memory in someone else's namespace
+        answers exactly like a missing one, so existence is not leaked."""
+        owner = await repository.namespace_of(memory_id)
+        if owner is None:
+            return  # the tool itself reports not-found
+        try:
+            authorize_namespace(resolve_caller(), owner)
+        except AuthorizationError as exc:
+            raise ToolError(f"memory {memory_id} not found") from exc
+
+    def guarded[**P, R](fn: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
+        """Authorize before the tool body runs, so a denied call has no
+        side effects at all (no writes, no audit entry, ADR 0029)."""
+        signature = inspect.signature(fn)
+
+        @functools.wraps(fn)
+        async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            bound = signature.bind_partial(*args, **kwargs)
+            bound.apply_defaults()
+            namespace = bound.arguments.get("namespace")
+            if isinstance(namespace, str):
+                authorize(namespace)
+            elif fn.__name__ in ("update", "forget"):
+                await authorize_memory(str(bound.arguments["id"]))
+            else:
+                resolve_caller()  # still requires authentication
+            return await fn(*args, **kwargs)
+
+        return wrapper
+
     ranking = RankingContext.from_settings(settings)
     audit = AuditRecorder(audit_repository, settings.audit_actor)
 
@@ -148,7 +221,9 @@ def build_server(
         be audited is reported as an error (ADR 0025, NFR6), never left
         silently unaudited."""
         try:
-            await audit.record(namespace, action, target_type, target_id, payload)
+            await audit.record(
+                namespace, action, target_type, target_id, payload, actor=resolve_caller().name
+            )
         except StorageError as exc:
             raise ToolError(f"{action} applied but audit append failed: {exc}") from exc
 
@@ -159,6 +234,7 @@ def build_server(
     background_tasks: set[asyncio.Task[None]] = set()
 
     @server.tool()
+    @guarded
     async def remember(
         content: str,
         source: str,
@@ -197,6 +273,7 @@ def build_server(
         return remembered
 
     @server.tool()
+    @guarded
     async def recall(
         id: str | None = None,
         key: str | None = None,
@@ -208,6 +285,7 @@ def build_server(
         return await recall_impl(repository, params)
 
     @server.tool()
+    @guarded
     async def update(
         id: str,
         content: str | None = None,
@@ -244,6 +322,7 @@ def build_server(
         return updated
 
     @server.tool()
+    @guarded
     async def forget(id: str, reason: str | None = None) -> ForgetResult:
         """Soft-delete a memory. Idempotent: forgetting an already-deleted
         memory succeeds and returns its existing deletion timestamp."""
@@ -258,6 +337,7 @@ def build_server(
         return forgotten
 
     @server.tool()
+    @guarded
     async def search(
         query: str,
         namespace: str = "default",
@@ -294,6 +374,7 @@ def build_server(
         )
 
     @server.tool()
+    @guarded
     async def related(
         entity_name: str,
         entity_type: str,
@@ -313,6 +394,7 @@ def build_server(
         return await related_impl(graph_repository, params)
 
     @server.tool()
+    @guarded
     async def ingest_session(
         transcript: str,
         source: str,
@@ -389,6 +471,7 @@ def build_server(
         return result
 
     @server.tool()
+    @guarded
     async def consolidate(namespace: str = "default", force: bool = False) -> ConsolidateResult:
         """Run one consolidation pass on demand: checks the trigger
         condition (episode count or time elapsed) unless `force=True`
@@ -416,6 +499,7 @@ def build_server(
         return consolidated
 
     @server.tool()
+    @guarded
     async def feedback(
         relation_id: str,
         outcome: str,
@@ -448,6 +532,7 @@ def build_server(
         return fed_back
 
     @server.tool()
+    @guarded
     async def find_skill(
         query: str,
         namespace: str = "default",
@@ -465,6 +550,7 @@ def build_server(
         )
 
     @server.tool()
+    @guarded
     async def get_skill(name: str, namespace: str = "default") -> GetSkillResult:
         """Retrieve one named, active procedural memory as literal
         SKILL.md-conformant markdown text (frontmatter + body). Returns
@@ -475,6 +561,7 @@ def build_server(
         return await get_skill_impl(procedural_memory_repository, params)
 
     @server.tool()
+    @guarded
     async def report_skill_outcome(
         name: str, success: bool, namespace: str = "default"
     ) -> ReportSkillOutcomeResult:
@@ -501,6 +588,7 @@ def build_server(
         return outcome
 
     @server.tool()
+    @guarded
     async def verify_audit(namespace: str = "default") -> VerifyAuditResult:
         """Recompute the namespace's tamper-evident audit hash chain and
         report whether it is intact, or the first altered/missing entry."""
@@ -647,6 +735,17 @@ async def main_async() -> None:
         consolidation_repository = PostgresConsolidationRepository(pool)
         procedural_memory_repository = PostgresProceduralMemoryRepository(pool)
         audit_repository = PostgresAuditLogRepository(pool)
+        token_verifier: TokenVerifier | None = None
+        auth_settings: AuthSettings | None = None
+        if settings.rootmem_transport == "http":
+            validate_http_bind(settings.rootmem_http_host, settings.rootmem_http_allow_non_loopback)
+            token_verifier = RootmemTokenVerifier(PostgresIdentityRepository(pool))
+            base_url = f"http://{settings.rootmem_http_host}:{settings.rootmem_http_port}"
+            auth_settings = AuthSettings(
+                issuer_url=base_url,
+                resource_server_url=base_url,
+                validate_token_resource=False,
+            )
         server = build_server(
             repository,
             graph_repository,
@@ -658,9 +757,24 @@ async def main_async() -> None:
             procedural_distillation_provider,
             settings,
             audit_repository,
+            token_verifier,
+            auth_settings,
         )
-        logger.info("rootmem MCP server starting (stdio transport)")
-        await server.run_stdio_async()
+        if settings.rootmem_transport == "http":
+            logger.info(
+                "rootmem MCP server starting (streamable HTTP on %s:%s)",
+                settings.rootmem_http_host,
+                settings.rootmem_http_port,
+            )
+            await server.run_streamable_http_async(
+                host=settings.rootmem_http_host,
+                port=settings.rootmem_http_port,
+                stateless_http=True,
+                json_response=True,
+            )
+        else:
+            logger.info("rootmem MCP server starting (stdio transport)")
+            await server.run_stdio_async()
     finally:
         await pool.close()
 

@@ -15,6 +15,7 @@ import pytest_asyncio
 from rootmem.config import get_settings
 from rootmem.storage.postgres.connection import create_pool
 from rootmem.storage.postgres.consolidation_repository import PostgresConsolidationRepository
+from tests.integration.db_guard import truncate
 from tests.unit.storage.consolidation_contract import ConsolidationRepositoryContract
 
 
@@ -23,7 +24,7 @@ async def pool() -> AsyncIterator[asyncpg.Pool]:
     settings = get_settings()
     created_pool = await create_pool(settings)
     async with created_pool.acquire() as conn:
-        await conn.execute("TRUNCATE consolidation_runs")
+        await truncate(conn, "consolidation_runs")
     try:
         yield created_pool
     finally:

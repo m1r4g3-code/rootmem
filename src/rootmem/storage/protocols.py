@@ -130,6 +130,13 @@ class MemoryRepository(Protocol):
         timestamp is simply overwritten with the same intent, not an error)."""
         ...
 
+    async def namespace_of(self, memory_id: str) -> str | None:
+        """The namespace owning `memory_id` (soft-deleted memories included,
+        since `forget` is idempotent), or None if no such memory exists.
+        Lets `update`/`forget`, which take only an id, be authorized before
+        they mutate anything (ADR 0029)."""
+        ...
+
     async def record_access(self, memory_ids: list[str], accessed_at: datetime) -> None:
         """Record a read of each non-deleted memory in `memory_ids`: sets
         `last_accessed_at` and increments `access_count` (ADR 0023). Unknown

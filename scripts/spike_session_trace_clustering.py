@@ -58,8 +58,7 @@ TRACE_SUCCESS_UNRELATED_D = "\n".join(
     [
         "The deployment pipeline was hanging on the docker build step.",
         "The root cause was a stale layer cache pointing at a deleted base image.",
-        "Clearing the build cache and rebuilding fixed the pipeline; "
-        "it now completes normally.",
+        "Clearing the build cache and rebuilding fixed the pipeline; it now completes normally.",
     ]
 )
 

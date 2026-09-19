@@ -10,9 +10,12 @@ import os
 import sys
 from collections.abc import AsyncIterator
 
+import pytest
 import pytest_asyncio
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
+
+from rootmem.config import get_settings
 
 _ENV_VARS_TO_FORWARD = (
     "POSTGRES_HOST",
@@ -30,6 +33,15 @@ _ENV_VARS_TO_FORWARD = (
     # Phase 4: per-source trust map (JSON), set by the Phase 4 exit test.
     "TRUST_SOURCE_RELIABILITY",
 )
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _integration_tests_use_a_test_database() -> None:
+    """ADR 0031: fail before any test runs if the configured database is not
+    a `_test` one (tests/conftest.py redirects to one by default)."""
+    name = get_settings().postgres_db
+    if not name.endswith("_test"):
+        raise RuntimeError(f"integration tests must use a '*_test' database, got {name!r}")
 
 
 @pytest_asyncio.fixture

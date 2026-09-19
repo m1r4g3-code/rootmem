@@ -69,11 +69,13 @@ query_seconds = time.perf_counter() - start_query
 print(f"1-hop Cypher query: {query_seconds:.3f}s -> {[r.to_dict() for r in rows]}")
 
 db.close()
-print("\nSummary: install succeeded (real Windows x86_64 wheel, ~64.5MiB, "
-      "bundles its own Java 25 runtime via jpype1 — no separate JVM install "
-      "needed). Functionally correct on first try. Cold start "
-      f"(create_database, first JVM touch) took {create_seconds:.2f}s — "
-      "meaningfully slower than anything else in this stack's startup path "
-      "(the MCP server itself starts in well under 1s). This is the concrete "
-      "cost side of the ADR 0006 trade-off: real, working, Windows-native "
-      "Cypher, at the price of a JVM cold-start tax on every process start.")
+print(
+    "\nSummary: install succeeded (real Windows x86_64 wheel, ~64.5MiB, "
+    "bundles its own Java 25 runtime via jpype1 — no separate JVM install "
+    "needed). Functionally correct on first try. Cold start "
+    f"(create_database, first JVM touch) took {create_seconds:.2f}s — "
+    "meaningfully slower than anything else in this stack's startup path "
+    "(the MCP server itself starts in well under 1s). This is the concrete "
+    "cost side of the ADR 0006 trade-off: real, working, Windows-native "
+    "Cypher, at the price of a JVM cold-start tax on every process start."
+)

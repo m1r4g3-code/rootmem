@@ -29,7 +29,7 @@ pytestmark = pytest.mark.integration_external
 
 
 @pytest.mark.asyncio
-async def test_lists_all_nine_tools(mcp_session: ClientSession) -> None:
+async def test_lists_all_thirteen_tools(mcp_session: ClientSession) -> None:
     result = await mcp_session.list_tools()
     names = {tool.name for tool in result.tools}
     assert names == {
@@ -42,6 +42,10 @@ async def test_lists_all_nine_tools(mcp_session: ClientSession) -> None:
         "ingest_session",
         "consolidate",
         "feedback",
+        "find_skill",
+        "get_skill",
+        "report_skill_outcome",
+        "verify_audit",
     }
 
 

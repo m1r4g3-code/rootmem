@@ -451,3 +451,20 @@ class MemoryRepositoryContract:
         fetched = await repository.get_by_id("ns", created.id)
         assert fetched is not None
         assert fetched.updated_at == created.updated_at
+
+    async def test_namespace_of_returns_owner_including_for_deleted(
+        self, repository: MemoryRepository
+    ) -> None:
+        created = await repository.create(
+            NewMemory(namespace="ns-owner", content="who owns me", source="test")
+        )
+        assert await repository.namespace_of(created.id) == "ns-owner"
+
+        await repository.soft_delete(created.id, reason="test")
+        assert await repository.namespace_of(created.id) == "ns-owner"
+
+    async def test_namespace_of_unknown_or_malformed_id_is_none(
+        self, repository: MemoryRepository
+    ) -> None:
+        assert await repository.namespace_of("00000000-0000-0000-0000-000000000000") is None
+        assert await repository.namespace_of("not-a-uuid") is None

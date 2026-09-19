@@ -5,15 +5,16 @@
 [![CI](https://github.com/m1r4g3-code/rootmem/actions/workflows/ci.yml/badge.svg)](https://github.com/m1r4g3-code/rootmem/actions/workflows/ci.yml)
 ![Python 3.13](https://img.shields.io/badge/python-3.13-blue)
 ![mypy --strict](https://img.shields.io/badge/mypy-strict-informational)
-![Phase 4](https://img.shields.io/badge/phase-4%20%E2%80%94%20ranking%2C%20decay%2C%20trust%20%26%20audit-success)
+![Phase 4](https://img.shields.io/badge/phase-5%20%E2%80%94%20remote%20transport%2C%20identity%20%26%20test%20isolation-success)
 
 ROOTMEM gives an AI coding agent (Claude Code, Cursor, or anything else that
 speaks MCP) a real, persistent memory — one that survives process restarts,
 new chats, and new machines, instead of evaporating the moment a context
 window ends. This repository is a **chartered, multi-phase build**, now
-through Phase 4: thirteen MCP tools over a real Postgres store, with a
+through Phase 5: thirteen MCP tools over a real Postgres store, with a
 semantic graph, consolidation into skills and lessons, multi-factor ranking
-with decay and trust, and a tamper-evident audit log — each phase proven over
+with decay and trust, a tamper-evident audit log, and an optional authenticated HTTP transport with
+per-agent identities — each phase proven over
 the actual protocol, not just in unit tests. The sections below describe the
 Phase 0 foundation the later phases build on; see Status for the full arc.
 
@@ -248,8 +249,13 @@ caught before they could ship.
 | 2 | `v0.2.0-phase2` | Consolidation, salience, Bayesian belief |
 | 3 | `v0.3.0-phase3` | Procedural memory, failure-to-lesson, SKILL.md |
 | 4 | `v0.4.0-phase4` | Ranking, decay, trust, tamper-evident audit log |
+| 5 | `v0.5.0-phase5` | Streamable-HTTP transport, agent identities and namespace authorization, separate test database |
 
 Each phase has its own research memo, requirements, ADRs, exit-criterion
 test and manual sign-off log under `docs/` and `scripts/`. Ranking weights,
 decay stability and trust reliabilities are provisional defaults, not tuned
-on real usage. Cross-instance identity and remote transport are not built.
+on real usage. Over HTTP the server needs a bearer token from
+`python -m rootmem.identity.cli create`, binds loopback by default and has no
+TLS (put a reverse proxy in front); tokens have no expiry or rotation yet.
+Integration tests run against `<POSTGRES_DB>_test`
+(`python scripts/create_test_db.py`).

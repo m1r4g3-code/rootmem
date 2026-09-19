@@ -198,6 +198,10 @@ class InMemoryMemoryRepository:
                     update={"consolidated_at": consolidated_at}
                 )
 
+    async def namespace_of(self, memory_id: str) -> str | None:
+        record = self._records.get(memory_id)
+        return record.namespace if record is not None else None
+
     async def record_access(self, memory_ids: list[str], accessed_at: datetime) -> None:
         for memory_id in memory_ids:
             record = self._records.get(memory_id)

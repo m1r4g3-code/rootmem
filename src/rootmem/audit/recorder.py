@@ -31,6 +31,7 @@ class AuditRecorder:
         target_type: str,
         target_id: str | None,
         payload: dict[str, Any] | None = None,
+        actor: str | None = None,
     ) -> None:
         """Append one entry. Propagates `StorageError` on failure: an
         operation that cannot be audited must be reported, never silently
@@ -38,5 +39,10 @@ class AuditRecorder:
         if self._repository is None:
             return
         await self._repository.append(
-            namespace, self._actor, action, target_type, target_id, payload or {}
+            namespace,
+            actor if actor is not None else self._actor,
+            action,
+            target_type,
+            target_id,
+            payload or {},
         )

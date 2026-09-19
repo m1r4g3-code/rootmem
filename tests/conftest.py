@@ -1,6 +1,24 @@
 from __future__ import annotations
 
+import os
+
 import pytest
+
+from rootmem.config import Settings, get_settings
+
+
+def _use_test_database() -> None:
+    """ADR 0031: tests never touch the live database. Point every test (and
+    every server subprocess that inherits os.environ) at `<db>_test`, unless
+    the configured database already is a test database. Runs at import time,
+    before anything caches settings."""
+    configured = Settings().postgres_db
+    if not configured.endswith("_test"):
+        os.environ["POSTGRES_DB"] = os.environ.get("POSTGRES_TEST_DB", f"{configured}_test")
+    get_settings.cache_clear()
+
+
+_use_test_database()
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
