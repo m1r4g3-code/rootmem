@@ -13,4 +13,4 @@ from rootmem.storage.protocols import MemoryRepository
 async def forget(repository: MemoryRepository, params: ForgetParams) -> ForgetResult:
     record = await repository.soft_delete(params.id, params.reason)
     assert record.deleted_at is not None
-    return ForgetResult(id=record.id, deleted_at=record.deleted_at)
+    return ForgetResult(id=record.id, deleted_at=record.deleted_at, namespace=record.namespace)

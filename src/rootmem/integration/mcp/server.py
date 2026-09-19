@@ -19,6 +19,7 @@ Phase 0 plan calls for, without this module reimplementing it.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from mcp.server.mcpserver import MCPServer
@@ -53,6 +54,7 @@ if TYPE_CHECKING:
     )
     from rootmem.embedding.voyage import VoyageEmbeddingProvider
     from rootmem.extraction.anthropic_provider import AnthropicExtractionProvider
+from rootmem.audit.recorder import AuditRecorder, content_sha256
 from rootmem.integration.mcp.schemas import (
     ConsolidateParams,
     ConsolidateResult,
@@ -72,10 +74,14 @@ from rootmem.integration.mcp.schemas import (
     RelatedResult,
     RememberParams,
     RememberResult,
+    ReportSkillOutcomeParams,
+    ReportSkillOutcomeResult,
     SearchParams,
     SearchResponse,
     UpdateParams,
     UpdateResult,
+    VerifyAuditParams,
+    VerifyAuditResult,
 )
 from rootmem.integration.mcp.tools.consolidate import consolidate as consolidate_impl
 from rootmem.integration.mcp.tools.feedback import feedback as feedback_impl
@@ -86,18 +92,25 @@ from rootmem.integration.mcp.tools.ingest_session import ingest_session as inges
 from rootmem.integration.mcp.tools.recall import recall as recall_impl
 from rootmem.integration.mcp.tools.related import related as related_impl
 from rootmem.integration.mcp.tools.remember import remember as remember_impl
+from rootmem.integration.mcp.tools.report_skill_outcome import (
+    report_skill_outcome as report_skill_outcome_impl,
+)
 from rootmem.integration.mcp.tools.search import search as search_impl
 from rootmem.integration.mcp.tools.update import update as update_impl
+from rootmem.integration.mcp.tools.verify_audit import verify_audit as verify_audit_impl
 from rootmem.logging import configure_logging, get_logger
+from rootmem.retrieval.rerank import RankingContext
+from rootmem.storage.audit_protocols import AuditLogRepository
 from rootmem.storage.consolidation_protocols import ConsolidationRepository
 from rootmem.storage.graph_protocols import GraphRepository
+from rootmem.storage.postgres.audit_repository import PostgresAuditLogRepository
 from rootmem.storage.postgres.connection import create_pool
 from rootmem.storage.postgres.consolidation_repository import PostgresConsolidationRepository
 from rootmem.storage.postgres.graph_repository import PostgresGraphRepository
 from rootmem.storage.postgres.procedural_repository import PostgresProceduralMemoryRepository
 from rootmem.storage.postgres.repository import PostgresMemoryRepository
 from rootmem.storage.procedural_protocols import ProceduralMemoryRepository
-from rootmem.storage.protocols import MemoryRepository, NotFoundError
+from rootmem.storage.protocols import MemoryRepository, NotFoundError, StorageError
 
 
 def _validated[ModelT: BaseModel](model: type[ModelT], **kwargs: Any) -> ModelT:
@@ -118,8 +131,27 @@ def build_server(
     procedural_memory_repository: ProceduralMemoryRepository,
     procedural_distillation_provider: ProceduralDistillationProvider,
     settings: Settings,
+    audit_repository: AuditLogRepository | None = None,
 ) -> MCPServer:
     server = MCPServer(name="rootmem")
+    ranking = RankingContext.from_settings(settings)
+    audit = AuditRecorder(audit_repository, settings.audit_actor)
+
+    async def audit_record(
+        namespace: str,
+        action: str,
+        target_type: str,
+        target_id: str | None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        """Append an audit entry after a mutation. An operation that cannot
+        be audited is reported as an error (ADR 0025, NFR6), never left
+        silently unaudited."""
+        try:
+            await audit.record(namespace, action, target_type, target_id, payload)
+        except StorageError as exc:
+            raise ToolError(f"{action} applied but audit append failed: {exc}") from exc
+
     # Held so a fire-and-forget asyncio.Task isn't garbage-collected mid-
     # flight (a real, documented asyncio pitfall) -- discarded on completion
     # via the done_callback below. See NFR10, docs/requirements/
@@ -154,7 +186,15 @@ def build_server(
             metadata=metadata or {},
             idempotency_key=idempotency_key,
         )
-        return await remember_impl(repository, embedding_provider, params)
+        remembered = await remember_impl(repository, embedding_provider, params)
+        await audit_record(
+            namespace,
+            "remember",
+            "memory",
+            remembered.id,
+            {"source": source, "key": key, "content_sha256": content_sha256(content)},
+        )
+        return remembered
 
     @server.tool()
     async def recall(
@@ -180,9 +220,28 @@ def build_server(
             UpdateParams, id=id, content=content, confidence=confidence, metadata=metadata
         )
         try:
-            return await update_impl(repository, params)
+            updated = await update_impl(repository, params)
         except NotFoundError as exc:
             raise ToolError(str(exc)) from exc
+        await audit_record(
+            updated.namespace,
+            "update",
+            "memory",
+            updated.id,
+            {
+                "fields": sorted(
+                    field
+                    for field, value in (
+                        ("content", content),
+                        ("confidence", confidence),
+                        ("metadata", metadata),
+                    )
+                    if value is not None
+                ),
+                "content_sha256": content_sha256(content) if content is not None else None,
+            },
+        )
+        return updated
 
     @server.tool()
     async def forget(id: str, reason: str | None = None) -> ForgetResult:
@@ -190,9 +249,13 @@ def build_server(
         memory succeeds and returns its existing deletion timestamp."""
         params = _validated(ForgetParams, id=id, reason=reason)
         try:
-            return await forget_impl(repository, params)
+            forgotten = await forget_impl(repository, params)
         except NotFoundError as exc:
             raise ToolError(str(exc)) from exc
+        await audit_record(
+            forgotten.namespace, "forget", "memory", forgotten.id, {"reason": reason}
+        )
+        return forgotten
 
     @server.tool()
     async def search(
@@ -201,9 +264,16 @@ def build_server(
         limit: int = 10,
         source: str | None = None,
         mode: str = "hybrid",
+        entity_name: str | None = None,
+        entity_type: str | None = None,
+        as_of: datetime | None = None,
     ) -> SearchResponse:
         """Text, semantic, or hybrid (default) search over non-deleted
-        memories in a namespace. `mode`: "text" | "semantic" | "hybrid"."""
+        memories in a namespace, re-ranked by relevance, retention (decay),
+        salience, source trust and graph proximity; each result carries a
+        per-term `breakdown`. `mode`: "text" | "semantic" | "hybrid".
+        Naming an `entity_name`+`entity_type` lifts memories linked to it.
+        `as_of` scores retention at that instant without recording access."""
         params = _validated(
             SearchParams,
             query=query,
@@ -211,8 +281,17 @@ def build_server(
             limit=limit,
             source=source,
             mode=mode,
+            entity_name=entity_name,
+            entity_type=entity_type,
+            as_of=as_of,
         )
-        return await search_impl(repository, embedding_provider, params)
+        return await search_impl(
+            repository,
+            embedding_provider,
+            params,
+            ranking=ranking,
+            graph_repository=graph_repository,
+        )
 
     @server.tool()
     async def related(
@@ -263,6 +342,20 @@ def build_server(
         result = await ingest_session_impl(
             repository, graph_repository, embedding_provider, extraction_provider, params
         )
+        await audit_record(
+            namespace,
+            "ingest_session",
+            "memory",
+            result.memory_id,
+            {
+                "source": source,
+                "session_id": session_id,
+                "session_outcome": session_outcome,
+                "content_sha256": content_sha256(transcript),
+                "superseded_count": result.superseded_count,
+                "contested_count": result.contested_count,
+            },
+        )
 
         # Inline auto-trigger (ADR 0012, FR3): check the consolidation
         # trigger and, if met, run it in the background -- never blocking
@@ -301,7 +394,7 @@ def build_server(
         condition (episode count or time elapsed) unless `force=True`
         bypasses it, and no-ops cleanly (`ran: false`) when unmet."""
         params = _validated(ConsolidateParams, namespace=namespace, force=force)
-        return await consolidate_impl(
+        consolidated = await consolidate_impl(
             repository,
             graph_repository,
             consolidation_repository,
@@ -312,6 +405,15 @@ def build_server(
             settings,
             params,
         )
+        if consolidated.ran:
+            await audit_record(
+                namespace,
+                "consolidate",
+                "consolidation_run",
+                None,
+                consolidated.model_dump(mode="json"),
+            )
+        return consolidated
 
     @server.tool()
     async def feedback(
@@ -333,9 +435,17 @@ def build_server(
             note=note,
         )
         try:
-            return await feedback_impl(graph_repository, params)
+            fed_back = await feedback_impl(graph_repository, params)
         except NotFoundError as exc:
             raise ToolError(str(exc)) from exc
+        await audit_record(
+            namespace,
+            "feedback",
+            "relation",
+            relation_id,
+            {"outcome": outcome, "confidence": confidence, "note": note},
+        )
+        return fed_back
 
     @server.tool()
     async def find_skill(
@@ -350,7 +460,9 @@ def build_server(
         params = _validated(
             FindSkillParams, query=query, namespace=namespace, kind=kind, limit=limit
         )
-        return await find_skill_impl(procedural_memory_repository, embedding_provider, params)
+        return await find_skill_impl(
+            procedural_memory_repository, embedding_provider, params, ranking=ranking
+        )
 
     @server.tool()
     async def get_skill(name: str, namespace: str = "default") -> GetSkillResult:
@@ -361,6 +473,39 @@ def build_server(
         this server never writes to any filesystem skills directory."""
         params = _validated(GetSkillParams, name=name, namespace=namespace)
         return await get_skill_impl(procedural_memory_repository, params)
+
+    @server.tool()
+    async def report_skill_outcome(
+        name: str, success: bool, namespace: str = "default"
+    ) -> ReportSkillOutcomeResult:
+        """Report that applying the named skill/lesson worked (`success=true`)
+        or did not. Updates its effectiveness, which feeds `find_skill`'s
+        ranking. Explicit by design: nothing infers this signal."""
+        params = _validated(
+            ReportSkillOutcomeParams, name=name, namespace=namespace, success=success
+        )
+        outcome = await report_skill_outcome_impl(
+            procedural_memory_repository,
+            params,
+            reliability=settings.bayesian_source_reliability_feedback,
+            prior_strength=settings.bayesian_prior_strength,
+        )
+        if outcome.found:
+            await audit_record(
+                namespace,
+                "report_skill_outcome",
+                "procedural_memory",
+                name,
+                {"success": success, "applied_count": outcome.applied_count},
+            )
+        return outcome
+
+    @server.tool()
+    async def verify_audit(namespace: str = "default") -> VerifyAuditResult:
+        """Recompute the namespace's tamper-evident audit hash chain and
+        report whether it is intact, or the first altered/missing entry."""
+        params = _validated(VerifyAuditParams, namespace=namespace)
+        return await verify_audit_impl(audit_repository, params)
 
     return server
 
@@ -501,6 +646,7 @@ async def main_async() -> None:
         graph_repository = PostgresGraphRepository(pool, BayesianSettings.from_settings(settings))
         consolidation_repository = PostgresConsolidationRepository(pool)
         procedural_memory_repository = PostgresProceduralMemoryRepository(pool)
+        audit_repository = PostgresAuditLogRepository(pool)
         server = build_server(
             repository,
             graph_repository,
@@ -511,6 +657,7 @@ async def main_async() -> None:
             procedural_memory_repository,
             procedural_distillation_provider,
             settings,
+            audit_repository,
         )
         logger.info("rootmem MCP server starting (stdio transport)")
         await server.run_stdio_async()

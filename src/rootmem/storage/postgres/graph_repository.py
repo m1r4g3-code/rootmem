@@ -5,6 +5,7 @@ recursive CTEs for traversal."""
 
 from __future__ import annotations
 
+import uuid
 from typing import Literal
 
 import asyncpg
@@ -335,6 +336,37 @@ class PostgresGraphRepository:
                 )
         except (asyncpg.PostgresError, ValueError) as exc:
             raise StorageError(f"failed to link memory to entity: {exc}") from exc
+
+    async def entity_ids_for_memories(
+        self, namespace: str, memory_ids: list[str]
+    ) -> dict[str, set[str]]:
+        valid: list[str] = []
+        for memory_id in memory_ids:
+            try:
+                uuid.UUID(memory_id)
+            except ValueError:
+                continue
+            valid.append(memory_id)
+        if not valid:
+            return {}
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT me.memory_id, me.entity_id
+                    FROM memory_entities me
+                    JOIN entities e ON e.id = me.entity_id
+                    WHERE me.memory_id = ANY($1::uuid[]) AND e.namespace = $2
+                    """,
+                    valid,
+                    namespace,
+                )
+        except asyncpg.PostgresError as exc:
+            raise StorageError(f"failed to load memory entities: {exc}") from exc
+        result: dict[str, set[str]] = {}
+        for row in rows:
+            result.setdefault(str(row["memory_id"]), set()).add(str(row["entity_id"]))
+        return result
 
     async def link_relation_provenance(self, relation_id: str, memory_id: str) -> None:
         try:

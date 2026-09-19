@@ -35,6 +35,12 @@ class ProceduralMemoryRecord(BaseModel):
     updated_at: datetime
     deleted_at: datetime | None = None
     deleted_reason: str | None = None
+    # Phase 4 (ADR 0024): effectiveness as a Beta posterior over "this works",
+    # fed only by `record_outcome` (the explicit report_skill_outcome tool).
+    belief_alpha: float = 1.0
+    belief_beta: float = 1.0
+    applied_count: int = 0
+    success_count: int = 0
 
     @property
     def is_active(self) -> bool:
@@ -86,6 +92,15 @@ class ProceduralMemoryRepository(Protocol):
         mirroring `MemoryRepository.search_hybrid`'s shape. `query_embedding
         is None` degrades to text-only ranking (mirrors graceful degradation
         elsewhere in this codebase when embedding is unavailable)."""
+        ...
+
+    async def record_outcome(
+        self, namespace: str, name: str, success: bool, delta_alpha: float, delta_beta: float
+    ) -> ProceduralMemoryRecord | None:
+        """Atomically add `delta_alpha`/`delta_beta` to the active row's
+        Beta belief, bump `applied_count`, and bump `success_count` when
+        `success`. Returns the updated row, or None if no active row has
+        this name (ADR 0024)."""
         ...
 
     async def link_provenance(self, procedural_memory_id: str, memory_id: str) -> None:

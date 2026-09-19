@@ -130,6 +130,13 @@ class MemoryRepository(Protocol):
         timestamp is simply overwritten with the same intent, not an error)."""
         ...
 
+    async def record_access(self, memory_ids: list[str], accessed_at: datetime) -> None:
+        """Record a read of each non-deleted memory in `memory_ids`: sets
+        `last_accessed_at` and increments `access_count` (ADR 0023). Unknown
+        or deleted ids are ignored, never an error. Callers treat a failure
+        as non-fatal -- a read must not fail because tracking did."""
+        ...
+
     async def update_salience(self, memory_id: str, salience_score: float) -> None:
         """Persist a computed `salience_score` (ADR 0016/
         docs/math-spec/phase2-math-spec.md) for `memory_id`."""

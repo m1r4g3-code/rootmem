@@ -183,6 +183,17 @@ class InMemoryGraphRepository:
     async def link_memory_entity(self, memory_id: str, entity_id: str) -> None:
         self._memory_entities.add((memory_id, entity_id))
 
+    async def entity_ids_for_memories(
+        self, namespace: str, memory_ids: list[str]
+    ) -> dict[str, set[str]]:
+        wanted = set(memory_ids)
+        result: dict[str, set[str]] = {}
+        for memory_id, entity_id in self._memory_entities:
+            entity = self._entities.get(entity_id)
+            if memory_id in wanted and entity is not None and entity.namespace == namespace:
+                result.setdefault(memory_id, set()).add(entity_id)
+        return result
+
     async def link_relation_provenance(self, relation_id: str, memory_id: str) -> None:
         self._relation_provenance.add((relation_id, memory_id))
 

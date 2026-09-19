@@ -16,7 +16,8 @@ from rootmem.storage.protocols import NotFoundError, StorageError
 _SELECT_COLUMNS = (
     "id, schema_version, namespace, key, idempotency_key, content, content_embedding, "
     "source, source_session_id, confidence, importance_flag, salience_score, consolidated_at, "
-    "session_outcome, metadata, created_at, updated_at, deleted_at, deleted_reason"
+    "session_outcome, last_accessed_at, access_count, metadata, created_at, updated_at, "
+    "deleted_at, deleted_reason"
 )
 
 
@@ -54,6 +55,8 @@ def _row_to_record(row: asyncpg.Record) -> MemoryRecord:
         salience_score=row["salience_score"],
         consolidated_at=row["consolidated_at"],
         session_outcome=row["session_outcome"],
+        last_accessed_at=row["last_accessed_at"],
+        access_count=row["access_count"],
         metadata=row["metadata"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -366,6 +369,23 @@ class PostgresMemoryRepository:
                 )
         except (asyncpg.PostgresError, ValueError) as exc:
             raise StorageError(f"failed to mark memories consolidated: {exc}") from exc
+
+    async def record_access(self, memory_ids: list[str], accessed_at: datetime) -> None:
+        # Ids that aren't even UUID-shaped can never match; ignore them, as
+        # the in-memory fake does, rather than fail the whole batch.
+        memory_ids = [mid for mid in memory_ids if _is_syntactically_valid_id(mid)]
+        if not memory_ids:
+            return
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE memories SET last_accessed_at = $2, access_count = access_count + 1 "
+                    "WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL",
+                    memory_ids,
+                    accessed_at,
+                )
+        except (asyncpg.PostgresError, ValueError) as exc:
+            raise StorageError(f"failed to record access: {exc}") from exc
 
     async def update_salience(self, memory_id: str, salience_score: float) -> None:
         try:

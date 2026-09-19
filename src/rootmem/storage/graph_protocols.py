@@ -98,6 +98,14 @@ class GraphRepository(Protocol):
         already mentioned earlier in the same memory."""
         ...
 
+    async def entity_ids_for_memories(
+        self, namespace: str, memory_ids: list[str]
+    ) -> dict[str, set[str]]:
+        """For each memory id, the ids of entities linked to it via
+        `memory_entities` (ADR 0022's `graph_proximity` input). Memories with
+        no links are omitted from the result."""
+        ...
+
     async def link_relation_provenance(self, relation_id: str, memory_id: str) -> None:
         """Record that `relation_id` was derived (extracted or distilled)
         from `memory_id` (the `relation_provenance` join table). Idempotent,

@@ -231,3 +231,38 @@ class ProceduralMemoryRepositoryContract:
 
         results = await repository.search_hybrid("ns", "v1", None, kind="all", limit=10)
         assert results == []
+
+    async def test_record_outcome_updates_belief_and_counts(
+        self, repository: ProceduralMemoryRepository
+    ) -> None:
+        await repository.create(
+            NewProceduralMemory(
+                namespace="ns", kind="skill", name="fix-thing", description="d", body_markdown="b"
+            )
+        )
+
+        after_success = await repository.record_outcome("ns", "fix-thing", True, 2.0, 0.0)
+        after_failure = await repository.record_outcome("ns", "fix-thing", False, 0.0, 2.0)
+
+        assert after_success is not None and after_failure is not None
+        assert after_success.applied_count == 1 and after_success.success_count == 1
+        assert after_failure.applied_count == 2 and after_failure.success_count == 1
+        assert after_failure.belief_alpha == pytest.approx(3.0)
+        assert after_failure.belief_beta == pytest.approx(3.0)
+
+    async def test_record_outcome_on_unknown_name_returns_none(
+        self, repository: ProceduralMemoryRepository
+    ) -> None:
+        assert await repository.record_outcome("ns", "missing", True, 1.0, 0.0) is None
+
+    async def test_new_skill_starts_with_uninformative_belief(
+        self, repository: ProceduralMemoryRepository
+    ) -> None:
+        created = await repository.create(
+            NewProceduralMemory(
+                namespace="ns", kind="lesson", name="new-one", description="d", body_markdown="b"
+            )
+        )
+
+        assert (created.belief_alpha, created.belief_beta) == (1.0, 1.0)
+        assert (created.applied_count, created.success_count) == (0, 0)

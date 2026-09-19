@@ -198,6 +198,17 @@ class InMemoryMemoryRepository:
                     update={"consolidated_at": consolidated_at}
                 )
 
+    async def record_access(self, memory_ids: list[str], accessed_at: datetime) -> None:
+        for memory_id in memory_ids:
+            record = self._records.get(memory_id)
+            if record is not None and not record.is_deleted:
+                self._records[memory_id] = record.model_copy(
+                    update={
+                        "last_accessed_at": accessed_at,
+                        "access_count": record.access_count + 1,
+                    }
+                )
+
     async def update_salience(self, memory_id: str, salience_score: float) -> None:
         record = self._records.get(memory_id)
         if record is not None:

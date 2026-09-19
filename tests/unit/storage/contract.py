@@ -394,3 +394,45 @@ class MemoryRepositoryContract:
         )
 
         assert created.session_outcome is None
+
+    async def test_new_memory_has_no_access_history(self, repository: MemoryRepository) -> None:
+        created = await repository.create(
+            NewMemory(namespace="ns", content="never read", source="test")
+        )
+
+        assert created.last_accessed_at is None
+        assert created.access_count == 0
+
+    async def test_record_access_updates_timestamp_and_increments_count(
+        self, repository: MemoryRepository
+    ) -> None:
+        from datetime import UTC, datetime
+
+        created = await repository.create(
+            NewMemory(namespace="ns", content="read me twice", source="test")
+        )
+        first = datetime(2026, 9, 1, tzinfo=UTC)
+        second = datetime(2026, 9, 2, tzinfo=UTC)
+
+        await repository.record_access([created.id], first)
+        await repository.record_access([created.id], second)
+
+        fetched = await repository.get_by_id("ns", created.id)
+        assert fetched is not None
+        assert fetched.access_count == 2
+        assert fetched.last_accessed_at == second
+
+    async def test_record_access_ignores_deleted_unknown_and_empty(
+        self, repository: MemoryRepository
+    ) -> None:
+        from datetime import UTC, datetime
+
+        created = await repository.create(
+            NewMemory(namespace="ns", content="to be forgotten", source="test")
+        )
+        await repository.soft_delete(created.id, reason="test")
+
+        await repository.record_access([created.id, "not-a-uuid"], datetime(2026, 9, 1, tzinfo=UTC))
+        await repository.record_access([], datetime(2026, 9, 1, tzinfo=UTC))
+
+        assert await repository.get_by_id("ns", created.id) is None

@@ -18,7 +18,8 @@ from rootmem.storage.protocols import StorageError
 
 _COLUMNS = (
     "id, namespace, kind, name, description, body_markdown, content_embedding, "
-    "derivation, supersedes, superseded_by, created_at, updated_at, deleted_at, deleted_reason"
+    "derivation, supersedes, superseded_by, created_at, updated_at, deleted_at, deleted_reason, "
+    "belief_alpha, belief_beta, applied_count, success_count"
 )
 
 
@@ -39,6 +40,10 @@ def _row_to_record(row: asyncpg.Record) -> ProceduralMemoryRecord:
         updated_at=row["updated_at"],
         deleted_at=row["deleted_at"],
         deleted_reason=row["deleted_reason"],
+        belief_alpha=row["belief_alpha"],
+        belief_beta=row["belief_beta"],
+        applied_count=row["applied_count"],
+        success_count=row["success_count"],
     )
 
 
@@ -116,6 +121,32 @@ class PostgresProceduralMemoryRepository:
                 )
         except asyncpg.PostgresError as exc:
             raise StorageError(f"failed to get procedural memory by name: {exc}") from exc
+        return _row_to_record(row) if row is not None else None
+
+    async def record_outcome(
+        self, namespace: str, name: str, success: bool, delta_alpha: float, delta_beta: float
+    ) -> ProceduralMemoryRecord | None:
+        try:
+            async with self._pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    f"""
+                    UPDATE procedural_memories
+                    SET belief_alpha = belief_alpha + $3,
+                        belief_beta = belief_beta + $4,
+                        applied_count = applied_count + 1,
+                        success_count = success_count + $5
+                    WHERE namespace = $1 AND name = $2
+                      AND superseded_by IS NULL AND deleted_at IS NULL
+                    RETURNING {_COLUMNS}
+                    """,
+                    namespace,
+                    name,
+                    delta_alpha,
+                    delta_beta,
+                    1 if success else 0,
+                )
+        except asyncpg.PostgresError as exc:
+            raise StorageError(f"failed to record skill outcome: {exc}") from exc
         return _row_to_record(row) if row is not None else None
 
     async def search_hybrid(

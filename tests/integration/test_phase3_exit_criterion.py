@@ -137,40 +137,22 @@ async def test_procedural_and_lesson_distillation_end_to_end(mcp_session: Client
     session_b = f"session-b-{uuid.uuid4().hex[:8]}"
     session_c = f"session-c-{uuid.uuid4().hex[:8]}"
 
-    await _ingest_step(
-        mcp_session, namespace, _TRACE_SUCCESS_A_STEPS[0], session_a, "success"
-    )
-    await _ingest_step(
-        mcp_session, namespace, _TRACE_SUCCESS_A_STEPS[1], session_a, "success"
-    )
-    await _ingest_step(
-        mcp_session, namespace, _TRACE_SUCCESS_A_STEPS[2], session_a, "success"
-    )
+    await _ingest_step(mcp_session, namespace, _TRACE_SUCCESS_A_STEPS[0], session_a, "success")
+    await _ingest_step(mcp_session, namespace, _TRACE_SUCCESS_A_STEPS[1], session_a, "success")
+    await _ingest_step(mcp_session, namespace, _TRACE_SUCCESS_A_STEPS[2], session_a, "success")
 
     await asyncio.sleep(_RATE_LIMIT_PACING_SECONDS)
 
-    await _ingest_step(
-        mcp_session, namespace, _TRACE_SUCCESS_B_STEPS[0], session_b, "success"
-    )
-    await _ingest_step(
-        mcp_session, namespace, _TRACE_SUCCESS_B_STEPS[1], session_b, "success"
-    )
-    await _ingest_step(
-        mcp_session, namespace, _TRACE_SUCCESS_B_STEPS[2], session_b, "success"
-    )
+    await _ingest_step(mcp_session, namespace, _TRACE_SUCCESS_B_STEPS[0], session_b, "success")
+    await _ingest_step(mcp_session, namespace, _TRACE_SUCCESS_B_STEPS[1], session_b, "success")
+    await _ingest_step(mcp_session, namespace, _TRACE_SUCCESS_B_STEPS[2], session_b, "success")
 
     await asyncio.sleep(_RATE_LIMIT_PACING_SECONDS)
 
     # --- (ii): one failed session on a related-looking but distinct task. ---
-    await _ingest_step(
-        mcp_session, namespace, _TRACE_FAILURE_C_STEPS[0], session_c, "failure"
-    )
-    await _ingest_step(
-        mcp_session, namespace, _TRACE_FAILURE_C_STEPS[1], session_c, "failure"
-    )
-    await _ingest_step(
-        mcp_session, namespace, _TRACE_FAILURE_C_STEPS[2], session_c, "failure"
-    )
+    await _ingest_step(mcp_session, namespace, _TRACE_FAILURE_C_STEPS[0], session_c, "failure")
+    await _ingest_step(mcp_session, namespace, _TRACE_FAILURE_C_STEPS[1], session_c, "failure")
+    await _ingest_step(mcp_session, namespace, _TRACE_FAILURE_C_STEPS[2], session_c, "failure")
 
     await asyncio.sleep(_RATE_LIMIT_PACING_SECONDS)
 
@@ -213,9 +195,7 @@ async def test_procedural_and_lesson_distillation_end_to_end(mcp_session: Client
     # --- (e): get_skill returns literal SKILL.md-conformant text, and
     # applying it via an ordinary subsequent tool call succeeds. ---
     get_result = _unwrap(
-        await mcp_session.call_tool(
-            "get_skill", {"name": top["name"], "namespace": namespace}
-        )
+        await mcp_session.call_tool("get_skill", {"name": top["name"], "namespace": namespace})
     )
     assert get_result["found"] is True
     assert get_result["kind"] == "skill"

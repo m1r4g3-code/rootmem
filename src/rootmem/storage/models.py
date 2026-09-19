@@ -54,6 +54,11 @@ class MemoryRecord(BaseModel):
     # distillation's session-trace grouping (consolidation/procedural_clustering.py).
     session_outcome: Literal["success", "failure"] | None = None
 
+    # Phase 4 (ADR 0023): access tracking, the input R(t) decay needs. Only
+    # `MemoryRepository.record_access` writes these.
+    last_accessed_at: datetime | None = None
+    access_count: int = Field(default=0, ge=0)
+
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     created_at: datetime

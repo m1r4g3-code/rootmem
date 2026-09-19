@@ -27,6 +27,8 @@ _ENV_VARS_TO_FORWARD = (
     # without these — the subprocess needs them forwarded too.
     "VOYAGE_API_KEY",
     "ANTHROPIC_API_KEY",
+    # Phase 4: per-source trust map (JSON), set by the Phase 4 exit test.
+    "TRUST_SOURCE_RELIABILITY",
 )
 
 

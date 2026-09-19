@@ -19,4 +19,4 @@ async def update(repository: MemoryRepository, params: UpdateParams) -> UpdateRe
         content=params.content, confidence=params.confidence, metadata=params.metadata
     )
     record = await repository.update(params.id, changes)
-    return UpdateResult(id=record.id, updated_at=record.updated_at)
+    return UpdateResult(id=record.id, updated_at=record.updated_at, namespace=record.namespace)

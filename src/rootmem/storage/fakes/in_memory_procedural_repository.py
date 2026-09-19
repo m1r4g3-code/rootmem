@@ -52,6 +52,23 @@ class InMemoryProceduralMemoryRepository:
                 return record
         return None
 
+    async def record_outcome(
+        self, namespace: str, name: str, success: bool, delta_alpha: float, delta_beta: float
+    ) -> ProceduralMemoryRecord | None:
+        current = await self.get_by_name(namespace, name)
+        if current is None:
+            return None
+        updated = current.model_copy(
+            update={
+                "belief_alpha": current.belief_alpha + delta_alpha,
+                "belief_beta": current.belief_beta + delta_beta,
+                "applied_count": current.applied_count + 1,
+                "success_count": current.success_count + (1 if success else 0),
+            }
+        )
+        self._records[current.id] = updated
+        return updated
+
     async def search_hybrid(
         self,
         namespace: str,

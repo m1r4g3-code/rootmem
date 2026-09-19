@@ -130,6 +130,7 @@ class UpdateParams(BaseModel):
 class UpdateResult(BaseModel):
     id: str
     updated_at: datetime
+    namespace: str
 
 
 # --- forget -------------------------------------------------------------------
@@ -148,6 +149,7 @@ class ForgetParams(BaseModel):
 class ForgetResult(BaseModel):
     id: str
     deleted_at: datetime
+    namespace: str
 
 
 # --- search -------------------------------------------------------------------
@@ -162,10 +164,18 @@ class SearchParams(BaseModel):
     # Phase 0's full-text-only search, since real semantic retrieval is the
     # whole point of this phase. "text" preserves the exact Phase 0 behavior.
     mode: Literal["text", "semantic", "hybrid"] = "hybrid"
+    # Phase 4 (ADR 0022). Optional, explicit signals: naming an entity turns
+    # on the graph_proximity term; `as_of` scores retention at that instant
+    # (a what-if query, so it does not record access).
+    entity_name: str | None = None
+    entity_type: str | None = None
+    as_of: datetime | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> SearchParams:
         _reject_blank(self.query, "query")
+        if (self.entity_name is None) != (self.entity_type is None):
+            raise ValueError("entity_name and entity_type must be provided together")
         return self
 
 
@@ -176,6 +186,10 @@ class SearchResultItem(BaseModel):
     score: float
     source: str
     created_at: datetime
+    # Phase 4: per-term contribution to `score` (relevance, retention,
+    # salience, trust, graph_proximity) when multi-factor ranking is active;
+    # the values sum to `score`.
+    breakdown: dict[str, float] | None = None
 
 
 class SearchResponse(BaseModel):
@@ -343,6 +357,10 @@ class SkillSearchResultItem(BaseModel):
     kind: Literal["skill", "lesson"]
     description: str
     score: float
+    # Phase 4 (ADR 0024): posterior mean of "this works" and the per-term
+    # breakdown of `score`, present when multi-factor ranking is active.
+    effectiveness: float | None = None
+    breakdown: dict[str, float] | None = None
 
 
 class FindSkillResult(BaseModel):
@@ -366,3 +384,40 @@ class GetSkillResult(BaseModel):
     # entire contract for a skill ends here; installing it anywhere is the
     # calling agent's/human's job, not this server's.
     markdown: str | None = None
+
+
+# --- report_skill_outcome (Phase 4, ADR 0024) -----------------------------------
+
+
+class ReportSkillOutcomeParams(BaseModel):
+    name: str
+    namespace: str = "default"
+    success: bool
+
+    @model_validator(mode="after")
+    def _validate(self) -> ReportSkillOutcomeParams:
+        _reject_blank(self.name, "name")
+        return self
+
+
+class ReportSkillOutcomeResult(BaseModel):
+    name: str
+    found: bool
+    applied_count: int = 0
+    success_count: int = 0
+    effectiveness: float | None = None
+
+
+# --- verify_audit (Phase 4, ADR 0025) -------------------------------------------
+
+
+class VerifyAuditParams(BaseModel):
+    namespace: str = "default"
+
+
+class VerifyAuditResult(BaseModel):
+    valid: bool
+    entries_checked: int
+    first_broken_seq: int | None = None
+    reason: str | None = None
+    audit_enabled: bool = True

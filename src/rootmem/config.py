@@ -108,6 +108,25 @@ class Settings(BaseSettings):
     skill_name_max_length: int = Field(default=64, gt=0)
     skill_description_max_length: int = Field(default=1024, gt=0)
 
+    # Phase 4 ranking/decay/trust (ADRs 0022-0024,
+    # docs/math-spec/phase4-math-spec.md). All provisional: there is no real
+    # usage corpus to tune against yet.
+    rank_weight_relevance: float = Field(default=0.50, ge=0.0)
+    rank_weight_retention: float = Field(default=0.15, ge=0.0)
+    rank_weight_salience: float = Field(default=0.10, ge=0.0)
+    rank_weight_trust: float = Field(default=0.15, ge=0.0)
+    rank_weight_graph_proximity: float = Field(default=0.10, ge=0.0)
+    # Candidates fetched before re-ranking = limit * this factor (ADR 0022).
+    rank_candidate_overfetch: int = Field(default=3, ge=1)
+    decay_base_stability_days: float = Field(default=7.0, gt=0.0)
+    trust_default_reliability: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Per-`source` reliability overrides, e.g. {"claude-code": 0.9}. Set via
+    # env as JSON.
+    trust_source_reliability: dict[str, float] = Field(default_factory=dict)
+    # Identity recorded on audit entries (ADR 0025); there is no auth layer
+    # yet, so this names the server process, not an authenticated user.
+    audit_actor: str = "rootmem-mcp"
+
     @property
     def distillation_model_or_default(self) -> str:
         return self.distillation_model or self.extraction_model
