@@ -1,15 +1,18 @@
 """`asyncpg`-backed `IdentityRepository` (ADR 0027), backed by `identities`
-(migration 0009)."""
+(migrations 0009, 0010)."""
 
 from __future__ import annotations
+
+from datetime import datetime
 
 import asyncpg
 
 from rootmem.identity.models import Identity
+from rootmem.identity.scopes import Scope
 from rootmem.storage.identity_protocols import IdentityExistsError
 from rootmem.storage.protocols import StorageError
 
-_COLUMNS = "id, name, namespaces, created_at, revoked_at"
+_COLUMNS = "id, name, namespaces, created_at, revoked_at, scope, expires_at"
 
 
 def _row_to_identity(row: asyncpg.Record) -> Identity:
@@ -19,6 +22,8 @@ def _row_to_identity(row: asyncpg.Record) -> Identity:
         namespaces=list(row["namespaces"]),
         created_at=row["created_at"],
         revoked_at=row["revoked_at"],
+        scope=row["scope"],
+        expires_at=row["expires_at"],
     )
 
 
@@ -26,18 +31,27 @@ class PostgresIdentityRepository:
     def __init__(self, pool: asyncpg.Pool) -> None:
         self._pool = pool
 
-    async def create(self, name: str, namespaces: list[str], token_sha256: str) -> Identity:
+    async def create(
+        self,
+        name: str,
+        namespaces: list[str],
+        token_sha256: str,
+        scope: Scope = "readwrite",
+        expires_at: datetime | None = None,
+    ) -> Identity:
         try:
             async with self._pool.acquire() as conn:
                 row = await conn.fetchrow(
                     f"""
-                    INSERT INTO identities (name, namespaces, token_sha256)
-                    VALUES ($1, $2, $3)
+                    INSERT INTO identities (name, namespaces, token_sha256, scope, expires_at)
+                    VALUES ($1, $2, $3, $4, $5)
                     RETURNING {_COLUMNS}
                     """,
                     name,
                     namespaces,
                     token_sha256,
+                    scope,
+                    expires_at,
                 )
         except asyncpg.UniqueViolationError as exc:
             raise IdentityExistsError(name) from exc
@@ -79,4 +93,20 @@ class PostgresIdentityRepository:
                 )
         except asyncpg.PostgresError as exc:
             raise StorageError(f"failed to revoke identity: {exc}") from exc
+        return _row_to_identity(row) if row is not None else None
+
+    async def rotate(self, name: str, new_token_sha256: str) -> Identity | None:
+        try:
+            async with self._pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    f"""
+                    UPDATE identities SET token_sha256 = $2
+                    WHERE name = $1 AND revoked_at IS NULL
+                    RETURNING {_COLUMNS}
+                    """,
+                    name,
+                    new_token_sha256,
+                )
+        except asyncpg.PostgresError as exc:
+            raise StorageError(f"failed to rotate identity token: {exc}") from exc
         return _row_to_identity(row) if row is not None else None

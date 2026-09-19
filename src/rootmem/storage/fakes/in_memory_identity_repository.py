@@ -6,6 +6,7 @@ import uuid
 from datetime import UTC, datetime
 
 from rootmem.identity.models import Identity
+from rootmem.identity.scopes import Scope
 from rootmem.storage.identity_protocols import IdentityExistsError
 
 
@@ -14,7 +15,14 @@ class InMemoryIdentityRepository:
         self._by_id: dict[str, Identity] = {}
         self._digest_by_id: dict[str, str] = {}
 
-    async def create(self, name: str, namespaces: list[str], token_sha256: str) -> Identity:
+    async def create(
+        self,
+        name: str,
+        namespaces: list[str],
+        token_sha256: str,
+        scope: Scope = "readwrite",
+        expires_at: datetime | None = None,
+    ) -> Identity:
         if any(identity.name == name for identity in self._by_id.values()):
             raise IdentityExistsError(name)
         identity = Identity(
@@ -22,6 +30,8 @@ class InMemoryIdentityRepository:
             name=name,
             namespaces=list(namespaces),
             created_at=datetime.now(UTC),
+            scope=scope,
+            expires_at=expires_at,
         )
         self._by_id[identity.id] = identity
         self._digest_by_id[identity.id] = token_sha256
@@ -43,5 +53,14 @@ class InMemoryIdentityRepository:
                 if not identity.is_revoked:
                     identity = identity.model_copy(update={"revoked_at": datetime.now(UTC)})
                     self._by_id[identity.id] = identity
+                return identity
+        return None
+
+    async def rotate(self, name: str, new_token_sha256: str) -> Identity | None:
+        for identity in self._by_id.values():
+            if identity.name == name:
+                if identity.is_revoked:
+                    return None
+                self._digest_by_id[identity.id] = new_token_sha256
                 return identity
         return None

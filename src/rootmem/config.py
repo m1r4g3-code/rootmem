@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     rootmem_http_host: str = "127.0.0.1"
     rootmem_http_port: int = Field(default=8765, gt=0, le=65535)
     rootmem_http_allow_non_loopback: bool = False
+
+    # Phase 6 per-identity rate limit (ADR 0035). 0 disables. Provisional
+    # defaults; per server process (single node), reset on restart.
+    rate_limit_per_minute: int = Field(default=600, ge=0)
+    rate_limit_burst: int = Field(default=60, ge=1)
     rootmem_log_level: str = "INFO"
 
     # Phase 1 external LLM APIs (ADR 0009). None by default — code paths

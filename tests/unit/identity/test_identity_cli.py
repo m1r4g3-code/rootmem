@@ -45,3 +45,36 @@ async def test_revoke_then_token_stops_working(capsys: pytest.CaptureFixture[str
     assert await run(build_parser().parse_args(["revoke", "--name", "alice"]), repo) == 0
     assert await repo.get_by_token_hash(hash_token(token)) is None
     assert await run(build_parser().parse_args(["revoke", "--name", "nobody"]), repo) == 1
+
+
+async def test_create_with_scope_and_expiry_and_rotate(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = InMemoryIdentityRepository()
+    args = [
+        "create",
+        "--name",
+        "rev",
+        "--namespace",
+        "n",
+        "--scope",
+        "read",
+        "--expires-in-days",
+        "2",
+    ]
+    assert await run(build_parser().parse_args(args), repo) == 0
+    old_token = capsys.readouterr().out.strip().splitlines()[-1]
+    identity = await repo.get_by_token_hash(hash_token(old_token))
+    assert identity is not None
+    assert identity.scope == "read" and identity.expires_at is not None
+
+    assert await run(build_parser().parse_args(["rotate", "--name", "rev"]), repo) == 0
+    new_token = capsys.readouterr().out.strip().splitlines()[-1]
+    assert new_token != old_token
+    assert await repo.get_by_token_hash(hash_token(old_token)) is None
+    assert await repo.get_by_token_hash(hash_token(new_token)) is not None
+
+    assert await run(build_parser().parse_args(["rotate", "--name", "nobody"]), repo) == 1
+    await run(build_parser().parse_args(["list"]), repo)
+    listing = capsys.readouterr().out
+    assert "read" in listing and old_token not in listing and new_token not in listing

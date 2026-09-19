@@ -6,9 +6,11 @@ deliberately no way to read a token back: only its SHA-256 digest is stored.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
 from rootmem.identity.models import Identity
+from rootmem.identity.scopes import Scope
 
 
 class IdentityExistsError(Exception):
@@ -16,12 +18,21 @@ class IdentityExistsError(Exception):
 
 
 class IdentityRepository(Protocol):
-    async def create(self, name: str, namespaces: list[str], token_sha256: str) -> Identity:
+    async def create(
+        self,
+        name: str,
+        namespaces: list[str],
+        token_sha256: str,
+        scope: Scope = "readwrite",
+        expires_at: datetime | None = None,
+    ) -> Identity:
         """Create an identity; raises `IdentityExistsError` on a duplicate name."""
         ...
 
     async def get_by_token_hash(self, token_sha256: str) -> Identity | None:
-        """The identity owning this token digest, or None when unknown or revoked."""
+        """The identity owning this token digest, or None when unknown or
+        revoked. An expired identity IS returned: expiry is judged against
+        an injectable clock by the caller (`RootmemTokenVerifier`)."""
         ...
 
     async def list_identities(self) -> list[Identity]:
@@ -30,4 +41,10 @@ class IdentityRepository(Protocol):
 
     async def revoke(self, name: str) -> Identity | None:
         """Revoke by name (idempotent); returns the identity, or None if unknown."""
+        ...
+
+    async def rotate(self, name: str, new_token_sha256: str) -> Identity | None:
+        """Replace the stored token digest of an active identity; the old
+        token stops working immediately (ADR 0033). None if the name is
+        unknown or the identity is revoked."""
         ...

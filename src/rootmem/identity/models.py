@@ -1,10 +1,12 @@
-"""Agent identity (ADR 0027). Pure data, no I/O."""
+"""Agent identity (ADR 0027, 0033, 0034). Pure data, no I/O."""
 
 from __future__ import annotations
 
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
+
+from rootmem.identity.scopes import Scope
 
 # Only the trusted local (stdio) identity owns every namespace; issued
 # identities may not be created with it (see identity.cli).
@@ -19,10 +21,15 @@ class Identity(BaseModel):
     namespaces: list[str]
     created_at: datetime
     revoked_at: datetime | None = None
+    scope: Scope = "readwrite"
+    expires_at: datetime | None = None
 
     @property
     def is_revoked(self) -> bool:
         return self.revoked_at is not None
+
+    def is_expired(self, now: datetime) -> bool:
+        return self.expires_at is not None and now >= self.expires_at
 
 
 def local_identity(name: str, created_at: datetime) -> Identity:

@@ -32,6 +32,8 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 from rootmem.config import Settings, get_settings
 from rootmem.consolidation.procedural_protocols import (
@@ -64,7 +66,16 @@ from rootmem.audit.recorder import AuditRecorder, content_sha256
 from rootmem.identity.authz import AuthorizationError, authorize_namespace
 from rootmem.identity.bind import validate_http_bind
 from rootmem.identity.models import Identity, local_identity
+from rootmem.identity.ratelimit import TokenBucketLimiter
+from rootmem.identity.scopes import Scope, scope_allows
 from rootmem.identity.verifier import RootmemTokenVerifier
+from rootmem.integration.errors import (
+    FORBIDDEN,
+    NOT_FOUND,
+    TOO_MANY_REQUESTS,
+    UNAUTHENTICATED,
+    ApiToolError,
+)
 from rootmem.integration.mcp.schemas import (
     ConsolidateParams,
     ConsolidateResult,
@@ -108,6 +119,8 @@ from rootmem.integration.mcp.tools.report_skill_outcome import (
 from rootmem.integration.mcp.tools.search import search as search_impl
 from rootmem.integration.mcp.tools.update import update as update_impl
 from rootmem.integration.mcp.tools.verify_audit import verify_audit as verify_audit_impl
+from rootmem.integration.rest import mount_rest
+from rootmem.integration.routes import add_route
 from rootmem.logging import configure_logging, get_logger
 from rootmem.retrieval.rerank import RankingContext
 from rootmem.storage.audit_protocols import AuditLogRepository
@@ -145,12 +158,17 @@ def build_server(
     audit_repository: AuditLogRepository | None = None,
     token_verifier: TokenVerifier | None = None,
     auth_settings: AuthSettings | None = None,
+    health_check: Callable[[], Awaitable[bool]] | None = None,
+    rate_limiter: TokenBucketLimiter | None = None,
 ) -> MCPServer:
     server = MCPServer(name="rootmem", token_verifier=token_verifier, auth=auth_settings)
     # Over HTTP a verifier is always present and every call must carry an
     # identity; stdio has none and resolves to the trusted local identity.
     require_auth = token_verifier is not None
     local = local_identity(settings.audit_actor, datetime.now(UTC))
+    limiter = rate_limiter
+    if limiter is None and settings.rate_limit_per_minute > 0:
+        limiter = TokenBucketLimiter(settings.rate_limit_per_minute, settings.rate_limit_burst)
 
     def resolve_caller() -> Identity:
         """The authenticated identity for this call (ADR 0029). Fails
@@ -159,10 +177,13 @@ def build_server(
         token = get_access_token()
         if token is None:
             if require_auth:
-                raise ToolError("authentication required")
+                raise ApiToolError("authentication required", UNAUTHENTICATED)
             return local
         claims = token.claims or {}
+        raw_scope = claims.get("scope", "read")
+        scope: Scope = "readwrite" if raw_scope == "readwrite" else "read"  # fail safe
         return Identity(
+            scope=scope,
             id=str(claims.get("identity_id", token.subject)),
             name=token.client_id,
             namespaces=[str(n) for n in claims.get("namespaces", [])],
@@ -173,7 +194,7 @@ def build_server(
         try:
             authorize_namespace(resolve_caller(), namespace)
         except AuthorizationError as exc:
-            raise ToolError(str(exc)) from exc
+            raise ApiToolError(str(exc), FORBIDDEN) from exc
 
     async def authorize_memory(memory_id: str) -> None:
         """`update`/`forget` take only an id: look up its namespace and
@@ -185,7 +206,7 @@ def build_server(
         try:
             authorize_namespace(resolve_caller(), owner)
         except AuthorizationError as exc:
-            raise ToolError(f"memory {memory_id} not found") from exc
+            raise ApiToolError(f"memory {memory_id} not found", NOT_FOUND) from exc
 
     def guarded[**P, R](fn: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
         """Authorize before the tool body runs, so a denied call has no
@@ -196,6 +217,13 @@ def build_server(
         async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             bound = signature.bind_partial(*args, **kwargs)
             bound.apply_defaults()
+            caller = resolve_caller()
+            if not scope_allows(caller.scope, fn.__name__):
+                raise ApiToolError(
+                    f"scope {caller.scope!r} does not permit {fn.__name__!r}", FORBIDDEN
+                )
+            if limiter is not None and caller.id != local.id and not limiter.allow(caller.id):
+                raise ApiToolError("rate limit exceeded; retry shortly", TOO_MANY_REQUESTS)
             namespace = bound.arguments.get("namespace")
             if isinstance(namespace, str):
                 authorize(namespace)
@@ -300,7 +328,7 @@ def build_server(
         try:
             updated = await update_impl(repository, params)
         except NotFoundError as exc:
-            raise ToolError(str(exc)) from exc
+            raise ApiToolError(str(exc), NOT_FOUND) from exc
         await audit_record(
             updated.namespace,
             "update",
@@ -330,7 +358,7 @@ def build_server(
         try:
             forgotten = await forget_impl(repository, params)
         except NotFoundError as exc:
-            raise ToolError(str(exc)) from exc
+            raise ApiToolError(str(exc), NOT_FOUND) from exc
         await audit_record(
             forgotten.namespace, "forget", "memory", forgotten.id, {"reason": reason}
         )
@@ -521,7 +549,7 @@ def build_server(
         try:
             fed_back = await feedback_impl(graph_repository, params)
         except NotFoundError as exc:
-            raise ToolError(str(exc)) from exc
+            raise ApiToolError(str(exc), NOT_FOUND) from exc
         await audit_record(
             namespace,
             "feedback",
@@ -594,6 +622,24 @@ def build_server(
         report whether it is intact, or the first altered/missing entry."""
         params = _validated(VerifyAuditParams, namespace=namespace)
         return await verify_audit_impl(audit_repository, params)
+
+    if token_verifier is not None:
+        # REST only exists where auth does (HTTP mode); ADR 0036.
+        mount_rest(server, token_verifier)
+
+    if health_check is not None:
+        check = health_check
+
+        async def healthz(request: Request) -> Response:
+            """Unauthenticated liveness probe (ADR 0035): reveals only a status."""
+            try:
+                healthy = await check()
+            except Exception:  # noqa: BLE001 - any failure means unhealthy
+                healthy = False
+            body = {"status": "ok" if healthy else "unavailable"}
+            return JSONResponse(body, status_code=200 if healthy else 503)
+
+        add_route(server, "/healthz", ["GET"], healthz)
 
     return server
 
@@ -735,6 +781,11 @@ async def main_async() -> None:
         consolidation_repository = PostgresConsolidationRepository(pool)
         procedural_memory_repository = PostgresProceduralMemoryRepository(pool)
         audit_repository = PostgresAuditLogRepository(pool)
+
+        async def health_check() -> bool:
+            async with pool.acquire() as conn:
+                return bool(await conn.fetchval("SELECT 1") == 1)
+
         token_verifier: TokenVerifier | None = None
         auth_settings: AuthSettings | None = None
         if settings.rootmem_transport == "http":
@@ -759,6 +810,7 @@ async def main_async() -> None:
             audit_repository,
             token_verifier,
             auth_settings,
+            health_check,
         )
         if settings.rootmem_transport == "http":
             logger.info(

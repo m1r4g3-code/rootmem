@@ -4,7 +4,7 @@ in-memory fakes and the SDK's own auth context."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
@@ -22,6 +22,8 @@ from rootmem.consolidation.fakes.scripted_procedural_distillation_provider impor
 )
 from rootmem.embedding.fakes.fixture_provider import FixtureReplayEmbeddingProvider
 from rootmem.extraction.fakes.scripted_provider import ScriptedExtractionProvider
+from rootmem.identity.ratelimit import TokenBucketLimiter
+from rootmem.identity.scopes import Scope
 from rootmem.identity.tokens import generate_token, hash_token
 from rootmem.identity.verifier import RootmemTokenVerifier
 from rootmem.integration.mcp.server import build_server
@@ -36,7 +38,13 @@ from rootmem.storage.fakes.in_memory_repository import InMemoryMemoryRepository
 
 
 class _Rig:
-    def __init__(self, *, authenticated: bool) -> None:
+    def __init__(
+        self,
+        *,
+        authenticated: bool,
+        rate_limiter: TokenBucketLimiter | None = None,
+        health_check: Callable[[], Awaitable[bool]] | None = None,
+    ) -> None:
         self.memories = InMemoryMemoryRepository()
         self.audit = InMemoryAuditLogRepository()
         self.identities = InMemoryIdentityRepository()
@@ -63,11 +71,15 @@ class _Rig:
             self.audit,
             verifier,
             auth,
+            health_check,
+            rate_limiter,
         )
 
-    async def issue(self, name: str, namespaces: list[str]) -> AccessToken:
+    async def issue(
+        self, name: str, namespaces: list[str], scope: Scope = "readwrite"
+    ) -> AccessToken:
         token = generate_token()
-        await self.identities.create(name, namespaces, hash_token(token))
+        await self.identities.create(name, namespaces, hash_token(token), scope=scope)
         verifier = RootmemTokenVerifier(self.identities)
         access = await verifier.verify_token(token)
         assert access is not None
