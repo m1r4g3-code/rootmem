@@ -12,6 +12,7 @@ Usage:
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -20,7 +21,11 @@ from yoyo import get_backend, read_migrations
 from rootmem.config import get_settings
 
 _STORAGE_DIR = Path(__file__).parent.parent / "src" / "rootmem" / "storage"
-MIGRATIONS_DIR = _STORAGE_DIR / "postgres" / "migrations"
+# ROOTMEM_MIGRATIONS_DIR lets the container image (which does not ship the
+# source tree layout) point at its copy of the migrations (ADR 0040).
+MIGRATIONS_DIR = Path(
+    os.environ.get("ROOTMEM_MIGRATIONS_DIR", str(_STORAGE_DIR / "postgres" / "migrations"))
+)
 
 
 def main() -> int:

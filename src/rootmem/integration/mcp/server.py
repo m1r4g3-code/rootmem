@@ -121,6 +121,7 @@ from rootmem.integration.mcp.tools.update import update as update_impl
 from rootmem.integration.mcp.tools.verify_audit import verify_audit as verify_audit_impl
 from rootmem.integration.rest import mount_rest
 from rootmem.integration.routes import add_route
+from rootmem.integration.transport import build_transport_security
 from rootmem.logging import configure_logging, get_logger
 from rootmem.retrieval.rerank import RankingContext
 from rootmem.storage.audit_protocols import AuditLogRepository
@@ -823,6 +824,7 @@ async def main_async() -> None:
                 port=settings.rootmem_http_port,
                 stateless_http=True,
                 json_response=True,
+                transport_security=build_transport_security(settings.rootmem_http_allowed_hosts),
             )
         else:
             logger.info("rootmem MCP server starting (stdio transport)")

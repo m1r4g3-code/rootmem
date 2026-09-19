@@ -1,0 +1,7 @@
+# TLS termination for ROOTMEM (ADR 0040). Caddy obtains and renews a
+# certificate for {$ROOTMEM_DOMAIN} automatically; the domain must resolve to
+# this host and ports 80/443 must be reachable.
+{$ROOTMEM_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy rootmem:8765
+}

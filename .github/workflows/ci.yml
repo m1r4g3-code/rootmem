@@ -114,3 +114,49 @@ jobs:
         run: uv run python scripts/migrate.py
       - name: Real-API integration tests
         run: uv run pytest -m integration_external -v
+
+  container:
+    name: Container image builds and serves /healthz
+    # ADR 0040: the image cannot be built on the development machine (Docker
+    # Desktop is broken there), so this job is the only place it is verified.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t rootmem:ci .
+      - name: Start Postgres on a private network
+        run: |
+          docker network create ci
+          docker run -d --name pg --network ci \
+            -e POSTGRES_USER=rootmem -e POSTGRES_PASSWORD=ci -e POSTGRES_DB=rootmem \
+            pgvector/pgvector:0.8.0-pg16
+          for i in $(seq 1 30); do
+            docker exec pg pg_isready -U rootmem -d rootmem && break
+            sleep 2
+          done
+      - name: Run migrations from the image
+        run: |
+          docker run --rm --network ci \
+            -e POSTGRES_HOST=pg -e POSTGRES_USER=rootmem -e POSTGRES_PASSWORD=ci \
+            -e POSTGRES_DB=rootmem -e POSTGRES_SSLMODE=disable \
+            rootmem:ci python scripts/migrate.py
+      - name: Start the server and smoke-test it
+        run: |
+          docker run -d --name app --network ci -p 8765:8765 \
+            -e POSTGRES_HOST=pg -e POSTGRES_USER=rootmem -e POSTGRES_PASSWORD=ci \
+            -e POSTGRES_DB=rootmem -e POSTGRES_SSLMODE=disable \
+            -e VOYAGE_API_KEY=dummy -e ANTHROPIC_API_KEY=dummy \
+            rootmem:ci
+          ok=""
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8765/healthz | grep -q '"status":"ok"'; then ok=1; break; fi
+            sleep 2
+          done
+          if [ -z "$ok" ]; then docker logs app; exit 1; fi
+          # Unauthenticated calls must be refused.
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8765/mcp \
+            -H 'content-type: application/json' -d '{}')" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/v1/tools)" = "401"
+      - name: Show server logs on failure
+        if: failure()
+        run: docker logs app || true

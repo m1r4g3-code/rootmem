@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     rootmem_http_host: str = "127.0.0.1"
     rootmem_http_port: int = Field(default=8765, gt=0, le=65535)
     rootmem_http_allow_non_loopback: bool = False
+    # Comma-separated hostnames the deployment serves (Host/Origin protection).
+    rootmem_http_allowed_hosts: str = ""
 
     # Phase 6 per-identity rate limit (ADR 0035). 0 disables. Provisional
     # defaults; per server process (single node), reset on restart.

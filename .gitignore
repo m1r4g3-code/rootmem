@@ -23,3 +23,6 @@ htmlcov/
 .vscode/
 .idea/
 .claude/
+
+# Production env file for deploy/ (secrets)
+deploy/.env.prod

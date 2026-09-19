@@ -1,0 +1,72 @@
+# Production-shaped deployment (ADR 0040): ROOTMEM behind a TLS reverse proxy,
+# with its own Postgres. NOT verified locally (Docker is broken on the
+# development machine); CI builds the image and smoke-tests it. Treat this as
+# a starting point and read docs/operations.md before exposing it.
+#
+#   cp deploy/.env.prod.example deploy/.env.prod   # then edit every value
+#   docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.prod up -d --build
+#   docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.prod \
+#       run --rm rootmem python -m rootmem.identity.cli create --name agent --namespace team
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.0-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rootmem
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: rootmem
+    volumes:
+      - rootmem_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rootmem -d rootmem"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # No published port: only the rootmem containers can reach the database.
+
+  migrate:
+    build: ..
+    command: ["python", "scripts/migrate.py"]
+    environment: &db_env
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: rootmem
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: rootmem
+      POSTGRES_SSLMODE: disable # the database is on a private network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  rootmem:
+    build: ..
+    restart: unless-stopped
+    environment:
+      <<: *db_env
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:?set VOYAGE_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY}
+      ROOTMEM_HTTP_ALLOWED_HOSTS: ${ROOTMEM_DOMAIN:?set ROOTMEM_DOMAIN}
+      ROOTMEM_LOG_LEVEL: INFO
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # No published port either: the proxy below is the only way in.
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      ROOTMEM_DOMAIN: ${ROOTMEM_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - rootmem
+
+volumes:
+  rootmem_pg:
+  caddy_data:
