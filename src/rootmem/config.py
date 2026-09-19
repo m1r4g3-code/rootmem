@@ -90,9 +90,31 @@ class Settings(BaseSettings):
     novelty_neighbor_sample_size: int = Field(default=10, gt=0)
     salience_repetition_saturation_count: int = Field(default=3, gt=0)
 
+    # Phase 3 procedural memory / SKILL.md (ADRs 0017-0021,
+    # docs/math-spec/phase3-math-spec.md). Session-trace similarity carries
+    # over distillation_similarity_threshold's starting value, independently
+    # re-validated by scripts/spike_session_trace_clustering.py against real
+    # voyage-4 embeddings of session-trace summaries (a different embedding
+    # target than Phase 2's single-sentence near-duplicates).
+    procedural_min_session_length: int = Field(default=2, gt=0)
+    procedural_min_recurrence: int = Field(default=2, ge=1)
+    lesson_min_recurrence: int = Field(default=1, ge=1)
+    procedural_session_similarity_threshold: float = Field(default=0.80, ge=0.0, le=1.0)
+    # Defaults to extraction_model's value at settings-construction time if
+    # left unset (see the property below) — same reuse pattern as
+    # distillation_model_or_default.
+    procedural_distillation_model: str | None = None
+    # agentskills.io's own published constraints (ADR 0018).
+    skill_name_max_length: int = Field(default=64, gt=0)
+    skill_description_max_length: int = Field(default=1024, gt=0)
+
     @property
     def distillation_model_or_default(self) -> str:
         return self.distillation_model or self.extraction_model
+
+    @property
+    def procedural_distillation_model_or_default(self) -> str:
+        return self.procedural_distillation_model or self.extraction_model
 
     @property
     def postgres_dsn(self) -> str:

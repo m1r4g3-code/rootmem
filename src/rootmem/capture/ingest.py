@@ -13,6 +13,8 @@ unit-testable against fakes with zero I/O, wired to real adapters only in
 
 from __future__ import annotations
 
+from typing import Literal
+
 from rootmem.embedding.protocols import EmbeddingProvider, embed_or_none
 from rootmem.extraction.models import ExtractionContext
 from rootmem.extraction.pipeline import apply_extraction
@@ -35,13 +37,16 @@ async def ingest_transcript(
     source: str,
     source_session_id: str | None = None,
     importance_flag: float = 0.0,
+    session_outcome: Literal["success", "failure"] | None = None,
 ) -> IngestResult:
     """Embed and store `content` as a memory, then extract entities/relations
     from it into the graph. Both the embedding call and the extraction call
     degrade gracefully on failure (NFR2, docs/requirements/phase1-requirements.md)
     — an external-API outage never blocks the memory from being stored.
     `importance_flag` (Phase 2, FR1) is a cheap, optional input to salience
-    scoring, applied at consolidation time, not here."""
+    scoring, applied at consolidation time, not here. `session_outcome`
+    (Phase 3, FR1, ADR 0019) is a cheap, optional, explicit signal feeding
+    episodic->procedural/failure->lesson distillation's session grouping."""
     embedding = await embed_or_none(embedding_provider, content)
 
     memory = await memory_repository.create(
@@ -52,6 +57,7 @@ async def ingest_transcript(
             source=source,
             source_session_id=source_session_id,
             importance_flag=importance_flag,
+            session_outcome=session_outcome,
         )
     )
 

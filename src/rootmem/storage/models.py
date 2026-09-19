@@ -9,7 +9,7 @@ not the same type, so a wire-format change doesn't leak into storage code.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -48,6 +48,12 @@ class MemoryRecord(BaseModel):
     salience_score: float | None = None
     consolidated_at: datetime | None = None
 
+    # Phase 3 (ADR 0019): explicit, agent-supplied, ingest_session-only
+    # signal -- None means "no outcome reported," never inferred from any
+    # other signal (e.g. relation_feedback). Feeds procedural/lesson
+    # distillation's session-trace grouping (consolidation/procedural_clustering.py).
+    session_outcome: Literal["success", "failure"] | None = None
+
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     created_at: datetime
@@ -80,6 +86,7 @@ class NewMemory(BaseModel):
     source_session_id: str | None = None
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     importance_flag: float = Field(default=0.0, ge=0.0, le=1.0)
+    session_outcome: Literal["success", "failure"] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

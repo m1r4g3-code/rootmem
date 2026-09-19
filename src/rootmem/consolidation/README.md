@@ -1,6 +1,7 @@
 # consolidation
 
-Reserved for Phase 2: the "sleep cycle" — salience scoring, episodic→semantic
-distillation, episodic→procedural distillation, failure→lesson distillation,
-and the consolidation trigger. See `docs/math-spec/phase0-math-spec.md` for
-why none of this phase's math belongs in Phase 0.
+The "sleep cycle". One consolidation pass (trigger in `trigger.py`,
+orchestration in `distill.py`) runs salience scoring, episodic->semantic
+distillation (Phase 2), and episodic->procedural (skill) and failure->lesson
+distillation (Phase 3, `procedural_clustering.py`, `skill_format.py`). See
+`docs/adr/0012-*` through `0021-*`.

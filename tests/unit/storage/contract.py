@@ -371,3 +371,26 @@ class MemoryRepositoryContract:
         pairs = await repository.find_similar_pairs("ns", [a.id, b.id], threshold=0.0)
 
         assert pairs == []
+
+    async def test_create_stores_session_outcome(self, repository: MemoryRepository) -> None:
+        created = await repository.create(
+            NewMemory(
+                namespace="ns",
+                content="the fix worked",
+                source="test",
+                session_outcome="success",
+            )
+        )
+
+        fetched = await repository.get_by_id("ns", created.id)
+        assert fetched is not None
+        assert fetched.session_outcome == "success"
+
+    async def test_create_with_no_session_outcome_defaults_to_none(
+        self, repository: MemoryRepository
+    ) -> None:
+        created = await repository.create(
+            NewMemory(namespace="ns", content="no outcome reported", source="test")
+        )
+
+        assert created.session_outcome is None

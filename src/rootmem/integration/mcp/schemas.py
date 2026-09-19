@@ -259,6 +259,10 @@ class IngestSessionParams(BaseModel):
     namespace: str = "default"
     session_id: str | None = None
     importance_flag: float = Field(default=0.0, ge=0.0, le=1.0)
+    # Phase 3 (FR1, ADR 0019): explicit, optional, agent-supplied signal for
+    # episodic->procedural/failure->lesson distillation's session grouping --
+    # never inferred from feedback or any other signal.
+    session_outcome: Literal["success", "failure"] | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> IngestSessionParams:
@@ -295,6 +299,8 @@ class ConsolidateResult(BaseModel):
     episodes_processed: int = 0
     clusters_formed: int = 0
     facts_distilled: int = 0
+    procedures_distilled: int = 0
+    lessons_distilled: int = 0
 
 
 # --- feedback -------------------------------------------------------------------
@@ -315,3 +321,48 @@ class FeedbackParams(BaseModel):
 
 class FeedbackResult(BaseModel):
     relation: RelationView
+
+
+# --- find_skill / get_skill (Phase 3, ADR 0017/0018) -------------------------
+
+
+class FindSkillParams(BaseModel):
+    query: str
+    namespace: str = "default"
+    kind: Literal["skill", "lesson", "all"] = "all"
+    limit: int = Field(default=10, ge=1, le=50)
+
+    @model_validator(mode="after")
+    def _validate(self) -> FindSkillParams:
+        _reject_blank(self.query, "query")
+        return self
+
+
+class SkillSearchResultItem(BaseModel):
+    name: str
+    kind: Literal["skill", "lesson"]
+    description: str
+    score: float
+
+
+class FindSkillResult(BaseModel):
+    results: list[SkillSearchResultItem] = Field(default_factory=list)
+
+
+class GetSkillParams(BaseModel):
+    name: str
+    namespace: str = "default"
+
+    @model_validator(mode="after")
+    def _validate(self) -> GetSkillParams:
+        _reject_blank(self.name, "name")
+        return self
+
+
+class GetSkillResult(BaseModel):
+    found: bool
+    kind: Literal["skill", "lesson"] | None = None
+    # Literal SKILL.md-conformant markdown text (ADR 0018) -- ROOTMEM's
+    # entire contract for a skill ends here; installing it anywhere is the
+    # calling agent's/human's job, not this server's.
+    markdown: str | None = None

@@ -67,6 +67,55 @@ async def test_successful_ingest_embeds_extracts_and_reports_counts() -> None:
     assert memory.content_embedding == [0.1, 0.2, 0.3]
     assert result.embedded is True
     assert result.entities_extracted == 2
+
+
+@pytest.mark.asyncio
+async def test_session_outcome_is_persisted_on_the_stored_memory() -> None:
+    memory_repo = InMemoryMemoryRepository()
+    graph_repo = InMemoryGraphRepository()
+    embedding = _StubEmbeddingProvider()
+    extraction = ScriptedExtractionProvider({"step one": _extraction_result("Alice", "Acme Corp")})
+
+    result = await ingest_transcript(
+        memory_repo,
+        graph_repo,
+        embedding,
+        extraction,
+        namespace="ns",
+        content="step one",
+        source="test",
+        source_session_id="s1",
+        session_outcome="success",
+    )
+
+    memory = await memory_repo.get_by_id("ns", result.memory_id)
+    assert memory is not None
+    assert memory.session_outcome == "success"
+    assert memory.source_session_id == "s1"
+
+
+@pytest.mark.asyncio
+async def test_no_session_outcome_defaults_to_none() -> None:
+    memory_repo = InMemoryMemoryRepository()
+    graph_repo = InMemoryGraphRepository()
+    embedding = _StubEmbeddingProvider()
+    extraction = ScriptedExtractionProvider(
+        {"no outcome": _extraction_result("Alice", "Acme Corp")}
+    )
+
+    result = await ingest_transcript(
+        memory_repo,
+        graph_repo,
+        embedding,
+        extraction,
+        namespace="ns",
+        content="no outcome",
+        source="test",
+    )
+
+    memory = await memory_repo.get_by_id("ns", result.memory_id)
+    assert memory is not None
+    assert memory.session_outcome is None
     assert result.relations_extracted == 1
     assert result.superseded_count == 0
     assert result.contested_count == 0

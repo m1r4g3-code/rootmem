@@ -27,7 +27,12 @@ from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 
 from rootmem.config import Settings, get_settings
+from rootmem.consolidation.procedural_protocols import (
+    ProceduralDistillationContext,
+    ProceduralDistillationProvider,
+)
 from rootmem.consolidation.protocols import DistillationContext, DistillationProvider
+from rootmem.consolidation.skill_format import SkillDraft
 from rootmem.embedding.protocols import EmbeddingProvider
 from rootmem.extraction.contradiction import BayesianSettings
 from rootmem.extraction.models import ExtractionContext, ExtractionResult
@@ -43,6 +48,9 @@ if TYPE_CHECKING:
     from rootmem.consolidation.anthropic_distillation_provider import (
         AnthropicDistillationProvider,
     )
+    from rootmem.consolidation.anthropic_procedural_distillation_provider import (
+        AnthropicProceduralDistillationProvider,
+    )
     from rootmem.embedding.voyage import VoyageEmbeddingProvider
     from rootmem.extraction.anthropic_provider import AnthropicExtractionProvider
 from rootmem.integration.mcp.schemas import (
@@ -50,8 +58,12 @@ from rootmem.integration.mcp.schemas import (
     ConsolidateResult,
     FeedbackParams,
     FeedbackResult,
+    FindSkillParams,
+    FindSkillResult,
     ForgetParams,
     ForgetResult,
+    GetSkillParams,
+    GetSkillResult,
     IngestSessionParams,
     IngestSessionResult,
     RecallParams,
@@ -67,7 +79,9 @@ from rootmem.integration.mcp.schemas import (
 )
 from rootmem.integration.mcp.tools.consolidate import consolidate as consolidate_impl
 from rootmem.integration.mcp.tools.feedback import feedback as feedback_impl
+from rootmem.integration.mcp.tools.find_skill import find_skill as find_skill_impl
 from rootmem.integration.mcp.tools.forget import forget as forget_impl
+from rootmem.integration.mcp.tools.get_skill import get_skill as get_skill_impl
 from rootmem.integration.mcp.tools.ingest_session import ingest_session as ingest_session_impl
 from rootmem.integration.mcp.tools.recall import recall as recall_impl
 from rootmem.integration.mcp.tools.related import related as related_impl
@@ -80,7 +94,9 @@ from rootmem.storage.graph_protocols import GraphRepository
 from rootmem.storage.postgres.connection import create_pool
 from rootmem.storage.postgres.consolidation_repository import PostgresConsolidationRepository
 from rootmem.storage.postgres.graph_repository import PostgresGraphRepository
+from rootmem.storage.postgres.procedural_repository import PostgresProceduralMemoryRepository
 from rootmem.storage.postgres.repository import PostgresMemoryRepository
+from rootmem.storage.procedural_protocols import ProceduralMemoryRepository
 from rootmem.storage.protocols import MemoryRepository, NotFoundError
 
 
@@ -99,6 +115,8 @@ def build_server(
     extraction_provider: ExtractionProvider,
     consolidation_repository: ConsolidationRepository,
     distillation_provider: DistillationProvider,
+    procedural_memory_repository: ProceduralMemoryRepository,
+    procedural_distillation_provider: ProceduralDistillationProvider,
     settings: Settings,
 ) -> MCPServer:
     server = MCPServer(name="rootmem")
@@ -222,12 +240,17 @@ def build_server(
         namespace: str = "default",
         session_id: str | None = None,
         importance_flag: float = 0.0,
+        session_outcome: str | None = None,
     ) -> IngestSessionResult:
         """Embed and store `transcript` as a memory, then extract entities/
         relations from it into the graph. Both embedding and extraction
         degrade gracefully on failure rather than blocking the write.
         `importance_flag` (0-1) is a cheap, optional input to salience
-        scoring, applied later during consolidation."""
+        scoring, applied later during consolidation. `session_outcome`
+        ("success" | "failure") is a cheap, optional signal feeding
+        episodic->procedural/failure->lesson distillation's session
+        grouping -- pass it when `session_id` identifies an ordered,
+        multi-step task attempt whose outcome is known."""
         params = _validated(
             IngestSessionParams,
             transcript=transcript,
@@ -235,6 +258,7 @@ def build_server(
             namespace=namespace,
             session_id=session_id,
             importance_flag=importance_flag,
+            session_outcome=session_outcome,
         )
         result = await ingest_session_impl(
             repository, graph_repository, embedding_provider, extraction_provider, params
@@ -254,6 +278,9 @@ def build_server(
                     graph_repository,
                     consolidation_repository,
                     distillation_provider,
+                    embedding_provider,
+                    procedural_memory_repository,
+                    procedural_distillation_provider,
                     namespace,
                     settings,
                 )
@@ -279,6 +306,9 @@ def build_server(
             graph_repository,
             consolidation_repository,
             distillation_provider,
+            embedding_provider,
+            procedural_memory_repository,
+            procedural_distillation_provider,
             settings,
             params,
         )
@@ -307,6 +337,31 @@ def build_server(
         except NotFoundError as exc:
             raise ToolError(str(exc)) from exc
 
+    @server.tool()
+    async def find_skill(
+        query: str,
+        namespace: str = "default",
+        kind: str = "all",
+        limit: int = 10,
+    ) -> FindSkillResult:
+        """Hybrid text+vector search over distilled procedural memories
+        (skills/lessons), ranked by real content -- not name-matching.
+        `kind`: "skill" | "lesson" | "all"."""
+        params = _validated(
+            FindSkillParams, query=query, namespace=namespace, kind=kind, limit=limit
+        )
+        return await find_skill_impl(procedural_memory_repository, embedding_provider, params)
+
+    @server.tool()
+    async def get_skill(name: str, namespace: str = "default") -> GetSkillResult:
+        """Retrieve one named, active procedural memory as literal
+        SKILL.md-conformant markdown text (frontmatter + body). Returns
+        `found: false` (not an error) if no matching skill/lesson exists.
+        Installing the returned content anywhere is the caller's job --
+        this server never writes to any filesystem skills directory."""
+        params = _validated(GetSkillParams, name=name, namespace=namespace)
+        return await get_skill_impl(procedural_memory_repository, params)
+
     return server
 
 
@@ -333,6 +388,16 @@ def _import_and_construct_distillation_provider(
     )
 
     return AnthropicDistillationProvider(settings)
+
+
+def _import_and_construct_procedural_distillation_provider(
+    settings: Settings,
+) -> AnthropicProceduralDistillationProvider:
+    from rootmem.consolidation.anthropic_procedural_distillation_provider import (
+        AnthropicProceduralDistillationProvider,
+    )
+
+    return AnthropicProceduralDistillationProvider(settings)
 
 
 class _LazyEmbeddingProvider:
@@ -397,6 +462,23 @@ class _LazyDistillationProvider:
         return await provider.distill(texts, context)
 
 
+class _LazyProceduralDistillationProvider:
+    """Same rationale and mechanism as `_LazyEmbeddingProvider`/
+    `_LazyDistillationProvider`, for `AnthropicProceduralDistillationProvider`
+    (also constructs an `anthropic.AsyncAnthropic` client)."""
+
+    def __init__(self, settings: Settings) -> None:
+        self._task: asyncio.Task[AnthropicProceduralDistillationProvider] = asyncio.create_task(
+            asyncio.to_thread(_import_and_construct_procedural_distillation_provider, settings)
+        )
+
+    async def distill_procedure(
+        self, traces: list[list[str]], context: ProceduralDistillationContext
+    ) -> SkillDraft:
+        provider = await self._task
+        return await provider.distill_procedure(traces, context)
+
+
 async def main_async() -> None:
     settings = get_settings()
     configure_logging(settings.rootmem_log_level)
@@ -407,6 +489,9 @@ async def main_async() -> None:
     embedding_provider: EmbeddingProvider = _LazyEmbeddingProvider(settings)
     extraction_provider: ExtractionProvider = _LazyExtractionProvider(settings)
     distillation_provider: DistillationProvider = _LazyDistillationProvider(settings)
+    procedural_distillation_provider: ProceduralDistillationProvider = (
+        _LazyProceduralDistillationProvider(settings)
+    )
 
     pool = await create_pool(settings)
     try:
@@ -415,6 +500,7 @@ async def main_async() -> None:
         )
         graph_repository = PostgresGraphRepository(pool, BayesianSettings.from_settings(settings))
         consolidation_repository = PostgresConsolidationRepository(pool)
+        procedural_memory_repository = PostgresProceduralMemoryRepository(pool)
         server = build_server(
             repository,
             graph_repository,
@@ -422,6 +508,8 @@ async def main_async() -> None:
             extraction_provider,
             consolidation_repository,
             distillation_provider,
+            procedural_memory_repository,
+            procedural_distillation_provider,
             settings,
         )
         logger.info("rootmem MCP server starting (stdio transport)")

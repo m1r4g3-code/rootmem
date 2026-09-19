@@ -6,11 +6,14 @@ from __future__ import annotations
 
 from rootmem.config import Settings
 from rootmem.consolidation.distill import maybe_run_consolidation
+from rootmem.consolidation.procedural_protocols import ProceduralDistillationProvider
 from rootmem.consolidation.protocols import DistillationProvider
+from rootmem.embedding.protocols import EmbeddingProvider
 from rootmem.integration.mcp.schemas import ConsolidateParams, ConsolidateResult
 from rootmem.observability.metrics import log_operation
 from rootmem.storage.consolidation_protocols import ConsolidationRepository
 from rootmem.storage.graph_protocols import GraphRepository
+from rootmem.storage.procedural_protocols import ProceduralMemoryRepository
 from rootmem.storage.protocols import MemoryRepository
 
 
@@ -20,6 +23,9 @@ async def consolidate(
     graph_repository: GraphRepository,
     consolidation_repository: ConsolidationRepository,
     distillation_provider: DistillationProvider,
+    embedding_provider: EmbeddingProvider,
+    procedural_memory_repository: ProceduralMemoryRepository,
+    procedural_distillation_provider: ProceduralDistillationProvider,
     settings: Settings,
     params: ConsolidateParams,
 ) -> ConsolidateResult:
@@ -28,6 +34,9 @@ async def consolidate(
         graph_repository,
         consolidation_repository,
         distillation_provider,
+        embedding_provider,
+        procedural_memory_repository,
+        procedural_distillation_provider,
         params.namespace,
         settings,
         force=params.force,
@@ -40,4 +49,6 @@ async def consolidate(
         episodes_processed=result.episodes_processed,
         clusters_formed=result.clusters_formed,
         facts_distilled=result.facts_distilled,
+        procedures_distilled=result.procedures_distilled,
+        lessons_distilled=result.lessons_distilled,
     )

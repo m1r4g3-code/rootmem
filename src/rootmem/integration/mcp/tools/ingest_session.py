@@ -33,5 +33,6 @@ async def ingest_session(
         source=params.source,
         source_session_id=params.session_id,
         importance_flag=params.importance_flag,
+        session_outcome=params.session_outcome,
     )
     return IngestSessionResult.from_ingest_result(result)

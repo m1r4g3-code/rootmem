@@ -32,6 +32,8 @@ class InMemoryConsolidationRepository:
         episodes_processed: int,
         clusters_formed: int,
         facts_distilled: int,
+        procedures_distilled: int = 0,
+        lessons_distilled: int = 0,
     ) -> ConsolidationRun:
         run = self._runs.get(run_id)
         if run is None:
@@ -42,6 +44,8 @@ class InMemoryConsolidationRepository:
                 "episodes_processed": episodes_processed,
                 "clusters_formed": clusters_formed,
                 "facts_distilled": facts_distilled,
+                "procedures_distilled": procedures_distilled,
+                "lessons_distilled": lessons_distilled,
             }
         )
         self._runs[run_id] = updated

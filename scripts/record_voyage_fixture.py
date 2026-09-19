@@ -33,6 +33,45 @@ SENTENCES = [
     "Alice is employed at Acme Corp",
     "Alice's employer is Acme Corp",
     "The engineering team relocated to a new office at 500 Market Street.",
+    # Added for Phase 3 (consolidation/procedural_clustering.py, session-trace
+    # clustering testing): two differently-worded successful session traces
+    # describing the same underlying procedure (should cluster), one failed
+    # session trace on a related-looking task (should NOT cluster with the
+    # successful pair -- different outcome), and one unrelated successful
+    # trace (should NOT cluster with the successful pair -- different
+    # procedure). Each trace is the newline-joined ordered steps of one
+    # session, matching exactly how consolidation/procedural_clustering.py's
+    # group_session_traces builds a trace-summary string for embedding.
+    "\n".join(
+        [
+            "The test suite fails with a KeyError in the payment module.",
+            "The root cause is a missing default value in the config loader.",
+            "The fix is to add a default value in the config loader, and the tests pass.",
+        ]
+    ),
+    "\n".join(
+        [
+            "A test is failing due to a KeyError inside payment processing.",
+            "Root cause: the config loader has no default value set.",
+            "Fix applied: added a default value to the config loader; tests now pass.",
+        ]
+    ),
+    "\n".join(
+        [
+            "The test suite fails with a TypeError in the billing module.",
+            "Attempted fix: changed the input type in the billing handler.",
+            "The fix did not work; the TypeError persisted because the root cause "
+            "was actually a serialization bug in the API layer, not the input type.",
+        ]
+    ),
+    "\n".join(
+        [
+            "The deployment pipeline was hanging on the docker build step.",
+            "The root cause was a stale layer cache pointing at a deleted base image.",
+            "Clearing the build cache and rebuilding fixed the pipeline; "
+            "it now completes normally.",
+        ]
+    ),
 ]
 
 OUTPUT_PATH = (

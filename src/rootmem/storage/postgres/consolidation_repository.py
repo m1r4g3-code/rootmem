@@ -13,7 +13,8 @@ from rootmem.storage.protocols import NotFoundError, StorageError
 
 _RUN_COLUMNS = (
     "id, namespace, trigger_reason, started_at, completed_at, "
-    "episodes_processed, clusters_formed, facts_distilled"
+    "episodes_processed, clusters_formed, facts_distilled, "
+    "procedures_distilled, lessons_distilled"
 )
 
 
@@ -27,6 +28,8 @@ def _row_to_run(row: asyncpg.Record) -> ConsolidationRun:
         episodes_processed=row["episodes_processed"],
         clusters_formed=row["clusters_formed"],
         facts_distilled=row["facts_distilled"],
+        procedures_distilled=row["procedures_distilled"],
+        lessons_distilled=row["lessons_distilled"],
     )
 
 
@@ -59,6 +62,8 @@ class PostgresConsolidationRepository:
         episodes_processed: int,
         clusters_formed: int,
         facts_distilled: int,
+        procedures_distilled: int = 0,
+        lessons_distilled: int = 0,
     ) -> ConsolidationRun:
         try:
             async with self._pool.acquire() as conn:
@@ -66,7 +71,8 @@ class PostgresConsolidationRepository:
                     f"""
                     UPDATE consolidation_runs
                     SET completed_at = now(), episodes_processed = $2,
-                        clusters_formed = $3, facts_distilled = $4
+                        clusters_formed = $3, facts_distilled = $4,
+                        procedures_distilled = $5, lessons_distilled = $6
                     WHERE id = $1
                     RETURNING {_RUN_COLUMNS}
                     """,
@@ -74,6 +80,8 @@ class PostgresConsolidationRepository:
                     episodes_processed,
                     clusters_formed,
                     facts_distilled,
+                    procedures_distilled,
+                    lessons_distilled,
                 )
         except (asyncpg.PostgresError, ValueError) as exc:
             raise StorageError(f"failed to complete consolidation run: {exc}") from exc

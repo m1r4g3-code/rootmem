@@ -18,12 +18,17 @@ import sys
 
 from rootmem.config import get_settings
 from rootmem.consolidation.anthropic_distillation_provider import AnthropicDistillationProvider
+from rootmem.consolidation.anthropic_procedural_distillation_provider import (
+    AnthropicProceduralDistillationProvider,
+)
 from rootmem.consolidation.distill import maybe_run_consolidation
+from rootmem.embedding.voyage import VoyageEmbeddingProvider
 from rootmem.extraction.contradiction import BayesianSettings
 from rootmem.logging import configure_logging, get_logger
 from rootmem.storage.postgres.connection import create_pool
 from rootmem.storage.postgres.consolidation_repository import PostgresConsolidationRepository
 from rootmem.storage.postgres.graph_repository import PostgresGraphRepository
+from rootmem.storage.postgres.procedural_repository import PostgresProceduralMemoryRepository
 from rootmem.storage.postgres.repository import PostgresMemoryRepository
 
 
@@ -50,12 +55,18 @@ async def _run(argv: list[str]) -> int:
         graph_repository = PostgresGraphRepository(pool, BayesianSettings.from_settings(settings))
         consolidation_repository = PostgresConsolidationRepository(pool)
         distillation_provider = AnthropicDistillationProvider(settings)
+        embedding_provider = VoyageEmbeddingProvider(settings)
+        procedural_memory_repository = PostgresProceduralMemoryRepository(pool)
+        procedural_distillation_provider = AnthropicProceduralDistillationProvider(settings)
 
         result = await maybe_run_consolidation(
             memory_repository,
             graph_repository,
             consolidation_repository,
             distillation_provider,
+            embedding_provider,
+            procedural_memory_repository,
+            procedural_distillation_provider,
             args.namespace,
             settings,
             force=args.force,

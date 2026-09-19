@@ -16,7 +16,7 @@ from rootmem.storage.protocols import NotFoundError, StorageError
 _SELECT_COLUMNS = (
     "id, schema_version, namespace, key, idempotency_key, content, content_embedding, "
     "source, source_session_id, confidence, importance_flag, salience_score, consolidated_at, "
-    "metadata, created_at, updated_at, deleted_at, deleted_reason"
+    "session_outcome, metadata, created_at, updated_at, deleted_at, deleted_reason"
 )
 
 
@@ -53,6 +53,7 @@ def _row_to_record(row: asyncpg.Record) -> MemoryRecord:
         importance_flag=row["importance_flag"],
         salience_score=row["salience_score"],
         consolidated_at=row["consolidated_at"],
+        session_outcome=row["session_outcome"],
         metadata=row["metadata"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -76,8 +77,8 @@ class PostgresMemoryRepository:
                     f"""
                     INSERT INTO memories
                         (namespace, key, idempotency_key, content, content_embedding, source,
-                         source_session_id, confidence, importance_flag, metadata)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                         source_session_id, confidence, importance_flag, session_outcome, metadata)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                     ON CONFLICT (namespace, idempotency_key) WHERE idempotency_key IS NOT NULL
                     DO NOTHING
                     RETURNING {_SELECT_COLUMNS}
@@ -91,6 +92,7 @@ class PostgresMemoryRepository:
                     memory.source_session_id,
                     memory.confidence,
                     memory.importance_flag,
+                    memory.session_outcome,
                     memory.metadata,
                 )
                 if row is None:
@@ -296,7 +298,16 @@ class PostgresMemoryRepository:
                           AND deleted_at IS NULL
                           AND ($4::text IS NULL OR source = $4)
                     ) scored
-                    WHERE score > 0
+                    -- Not `score > 0`: `ts_rank` can return a tiny nonzero
+                    -- value (~1e-20) for a document with NO matching lexemes
+                    -- at all -- a floating-point artifact of its internal
+                    -- ranking arithmetic, found via direct reproduction
+                    -- against this exact query shape while building Phase
+                    -- 3's procedural-memory search (same pattern, same bug,
+                    -- fixed here too since it's real and the fix is safe).
+                    -- 1e-9 is comfortably below any genuine match's score
+                    -- and comfortably above that noise floor.
+                    WHERE score > 1e-9
                     ORDER BY score DESC
                     LIMIT $7
                     """,

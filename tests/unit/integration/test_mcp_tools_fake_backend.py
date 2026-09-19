@@ -10,12 +10,17 @@ import pytest
 
 from rootmem.config import Settings
 from rootmem.consolidation.fakes.scripted_distillation_provider import ScriptedDistillationProvider
+from rootmem.consolidation.fakes.scripted_procedural_distillation_provider import (
+    ScriptedProceduralDistillationProvider,
+)
 from rootmem.extraction.fakes.scripted_provider import ScriptedExtractionProvider
 from rootmem.extraction.models import ExtractedRelation, ExtractionResult
 from rootmem.integration.mcp.schemas import (
     ConsolidateParams,
     FeedbackParams,
+    FindSkillParams,
     ForgetParams,
+    GetSkillParams,
     IngestSessionParams,
     RecallParams,
     RelatedParams,
@@ -25,7 +30,9 @@ from rootmem.integration.mcp.schemas import (
 )
 from rootmem.integration.mcp.tools.consolidate import consolidate
 from rootmem.integration.mcp.tools.feedback import feedback
+from rootmem.integration.mcp.tools.find_skill import find_skill
 from rootmem.integration.mcp.tools.forget import forget
+from rootmem.integration.mcp.tools.get_skill import get_skill
 from rootmem.integration.mcp.tools.ingest_session import ingest_session
 from rootmem.integration.mcp.tools.recall import recall
 from rootmem.integration.mcp.tools.related import related
@@ -34,9 +41,13 @@ from rootmem.integration.mcp.tools.search import search
 from rootmem.integration.mcp.tools.update import update
 from rootmem.storage.fakes.in_memory_consolidation_repository import InMemoryConsolidationRepository
 from rootmem.storage.fakes.in_memory_graph_repository import InMemoryGraphRepository
+from rootmem.storage.fakes.in_memory_procedural_repository import (
+    InMemoryProceduralMemoryRepository,
+)
 from rootmem.storage.fakes.in_memory_repository import InMemoryMemoryRepository
 from rootmem.storage.graph_models import NewEntity, NewRelation
 from rootmem.storage.models import NewMemory
+from rootmem.storage.procedural_protocols import NewProceduralMemory
 from rootmem.storage.protocols import NotFoundError
 
 
@@ -262,10 +273,13 @@ async def test_ingest_session_stores_memory_and_extracts_graph(
 
 async def test_consolidate_force_runs_and_reports_no_facts_without_clusters(
     repository: InMemoryMemoryRepository,
+    embedding_provider: _StubEmbeddingProvider,
 ) -> None:
     graph_repository = InMemoryGraphRepository()
     consolidation_repository = InMemoryConsolidationRepository()
     distillation_provider = ScriptedDistillationProvider()
+    procedural_memory_repository = InMemoryProceduralMemoryRepository()
+    procedural_distillation_provider = ScriptedProceduralDistillationProvider()
     await repository.create(NewMemory(namespace="default", content="a lone fact", source="test"))
 
     result = await consolidate(
@@ -273,6 +287,9 @@ async def test_consolidate_force_runs_and_reports_no_facts_without_clusters(
         graph_repository,
         consolidation_repository,
         distillation_provider,
+        embedding_provider,
+        procedural_memory_repository,
+        procedural_distillation_provider,
         Settings(),
         ConsolidateParams(force=True),
     )
@@ -281,14 +298,19 @@ async def test_consolidate_force_runs_and_reports_no_facts_without_clusters(
     assert result.trigger_reason == "manual"
     assert result.episodes_processed == 1
     assert result.facts_distilled == 0
+    assert result.procedures_distilled == 0
+    assert result.lessons_distilled == 0
 
 
 async def test_consolidate_no_ops_when_trigger_not_met(
     repository: InMemoryMemoryRepository,
+    embedding_provider: _StubEmbeddingProvider,
 ) -> None:
     graph_repository = InMemoryGraphRepository()
     consolidation_repository = InMemoryConsolidationRepository()
     distillation_provider = ScriptedDistillationProvider()
+    procedural_memory_repository = InMemoryProceduralMemoryRepository()
+    procedural_distillation_provider = ScriptedProceduralDistillationProvider()
     await consolidation_repository.start_run("default", "manual")
 
     result = await consolidate(
@@ -296,6 +318,9 @@ async def test_consolidate_no_ops_when_trigger_not_met(
         graph_repository,
         consolidation_repository,
         distillation_provider,
+        embedding_provider,
+        procedural_memory_repository,
+        procedural_distillation_provider,
         Settings(consolidation_episode_threshold=500, consolidation_time_window_hours=24.0),
         ConsolidateParams(),
     )
@@ -337,3 +362,70 @@ async def test_feedback_missing_relation_raises_not_found() -> None:
             graph_repository,
             FeedbackParams(relation_id="00000000-0000-0000-0000-000000000000", outcome="confirmed"),
         )
+
+
+async def test_get_skill_returns_conformant_markdown_for_an_active_skill(
+    embedding_provider: _StubEmbeddingProvider,
+) -> None:
+    procedural_memory_repository = InMemoryProceduralMemoryRepository()
+    await procedural_memory_repository.create(
+        NewProceduralMemory(
+            namespace="default",
+            kind="skill",
+            name="fix-missing-config-default",
+            description="Use this when a test fails with a KeyError from a missing default.",
+            body_markdown="1. Find the missing default.\n2. Add it.",
+        )
+    )
+
+    result = await get_skill(
+        procedural_memory_repository, GetSkillParams(name="fix-missing-config-default")
+    )
+
+    assert result.found is True
+    assert result.kind == "skill"
+    assert result.markdown is not None
+    assert result.markdown.startswith("---\n")
+    assert "name: fix-missing-config-default" in result.markdown
+
+
+async def test_get_skill_not_found_returns_found_false() -> None:
+    procedural_memory_repository = InMemoryProceduralMemoryRepository()
+
+    result = await get_skill(procedural_memory_repository, GetSkillParams(name="no-such-skill"))
+
+    assert result.found is False
+    assert result.markdown is None
+
+
+async def test_find_skill_ranks_matching_skill_over_unrelated_one(
+    embedding_provider: _StubEmbeddingProvider,
+) -> None:
+    procedural_memory_repository = InMemoryProceduralMemoryRepository()
+    await procedural_memory_repository.create(
+        NewProceduralMemory(
+            namespace="default",
+            kind="skill",
+            name="fix-missing-config-default",
+            description="Use this when a test fails with a KeyError from a missing default.",
+            body_markdown="config default keyerror",
+        )
+    )
+    await procedural_memory_repository.create(
+        NewProceduralMemory(
+            namespace="default",
+            kind="lesson",
+            name="unrelated-docker-lesson",
+            description="Use this when a docker build hangs.",
+            body_markdown="docker build cache",
+        )
+    )
+
+    result = await find_skill(
+        procedural_memory_repository,
+        embedding_provider,
+        FindSkillParams(query="missing config default keyerror"),
+    )
+
+    assert len(result.results) == 1
+    assert result.results[0].name == "fix-missing-config-default"

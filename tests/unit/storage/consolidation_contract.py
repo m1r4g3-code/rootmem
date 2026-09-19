@@ -55,6 +55,25 @@ class ConsolidationRepositoryContract:
         assert completed.episodes_processed == 10
         assert completed.clusters_formed == 3
         assert completed.facts_distilled == 2
+        assert completed.procedures_distilled == 0
+        assert completed.lessons_distilled == 0
+
+    async def test_complete_run_records_procedural_and_lesson_counts(
+        self, repository: ConsolidationRepository
+    ) -> None:
+        run = await repository.start_run("ns", "manual")
+
+        completed = await repository.complete_run(
+            run.id,
+            episodes_processed=6,
+            clusters_formed=1,
+            facts_distilled=1,
+            procedures_distilled=1,
+            lessons_distilled=1,
+        )
+
+        assert completed.procedures_distilled == 1
+        assert completed.lessons_distilled == 1
 
     async def test_complete_run_missing_raises_not_found(
         self, repository: ConsolidationRepository

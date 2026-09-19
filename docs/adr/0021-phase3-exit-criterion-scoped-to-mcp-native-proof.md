@@ -1,0 +1,28 @@
+# ADR 0021: Phase 3's exit criterion is a scoped-down MCP-native proof, not a SWE-bench/Terminal-Bench benchmark lift
+
+**Status:** Accepted
+**Date:** 2026-09-18
+
+## Context
+
+The ROOTMEM Build Reference's literal exit criterion for the procedural-memory phase is a measurable lift (3-5+ points) on SWE-bench Verified or Terminal-Bench for a reference coding agent using ROOTMEM's memory versus without it. Achieving that literally requires: a benchmark harness (task loading, scoring, pass/fail grading against a public benchmark's own test suites), a reference coding agent implementation (something that actually attempts the benchmark's coding tasks, with and without memory access), and real, repeated, non-trivial-cost task runs against that harness. This is a materially different kind of deliverable than anything shipped in Phases 0-2 — closer to a standalone research evaluation project than a feature build, and it depends on procedural memory (this phase's own subject) already existing and working before it could even be meaningfully attempted.
+
+## Decision
+
+Phase 3's exit criterion (`docs/requirements/phase3-requirements.md`) proves the skill-induction → storage → retrieval → application *mechanism* end-to-end via direct, cheap MCP tool calls: episodic memories from repeated successful sessions cluster and distill into a well-formed procedural memory; a failed session distills into a lesson; a later session retrieves the right skill via semantic search over a natural-language description (not name-matching); and that session follows the retrieved content correctly through further MCP tool calls. **No benchmark harness, no reference coding agent implementation, and no real SWE-bench Verified/Terminal-Bench task run are built or executed as part of this phase.** This was put to the user directly as an explicit choice (full benchmark lift vs. a scoped-down MCP-native proof vs. a small self-authored task-set lift), and the scoped-down MCP-native proof was the user's confirmed decision.
+
+## Rationale
+
+Every phase to date has scoped its own exit criterion down from the source material's most ambitious framing, for the same underlying reason: matching the deliverable's cost and complexity to what the phase is actually trying to prove, and to this project's demonstrated infra-minimalism discipline. Phase 0 deferred a dedicated graph engine; Phase 1 shipped a deterministic contradiction rule instead of Bayesian math with no data to calibrate against; Phase 2 deferred procedural distillation itself out of its own scope specifically to avoid building a format (SKILL.md) before it existed as a real standard. A full benchmark lift is a bigger version of the same pattern: it would require standing up an entirely new class of infrastructure (a benchmark harness, a reference agent) this project has never built, to answer a research-scale question ("does procedural memory measurably improve coding-agent performance") that is only meaningful to ask *after* procedural memory itself exists, is well-formed, and can be retrieved and applied correctly — exactly what this phase's mechanism-level proof establishes as prerequisite scaffolding for that later, larger claim.
+
+## Alternatives considered
+
+- **The full SWE-bench Verified/Terminal-Bench benchmark lift, as literally specified.** Presented to the user as an option; not chosen. Would have required a benchmark harness, reference coding agent, and real task-run infrastructure this project has never built, at a cost and complexity disproportionate to validating that the underlying mechanism (induction/storage/retrieval/application) works at all.
+- **A small, self-authored custom task-set lift** (5-10 repeated coding-style tasks, measuring completion speed/success with vs. without a distilled skill). Presented to the user as a middle-ground option; not chosen. Would have produced a real, if narrow, measured lift number without a public benchmark's full harness — but still requires building a mini task-running/scoring loop this project has no existing infrastructure for, for a number whose statistical meaning at n=5-10 tasks would be weak regardless.
+- **No exit criterion involving retrieval/application at all — stop at "distillation produces a well-formed procedural memory.**" Rejected as too weak: it would leave the "does an agent actually retrieve and use it correctly" half of the phase's own stated goal (episodic→procedural distillation and its *application*) entirely unproven, unlike every prior phase's exit criterion, which always proves a full round-trip (write → read → correct behavior), not just the write half.
+
+## Consequences
+
+- The Phase 3 exit-criterion test and manual dogfooding pass never invoke, build, or depend on any benchmark dataset, scoring harness, or reference agent — they are pure MCP tool-call sequences against real Postgres/Voyage/Anthropic, exactly like Phase 1 and Phase 2's exit-criterion tests.
+- This phase makes no quantitative claim about coding-agent performance lift, and none should be inferred from its passing — it demonstrates the mechanism works, not that the mechanism measurably helps at benchmark scale.
+- **Named revisit trigger**: if a real benchmark harness becomes available to this project (built independently, or if a future phase's own scope requires one for an unrelated reason), or if a stakeholder claim ever depends on a real measured lift number, that is the point to build a genuine SWE-bench Verified/Terminal-Bench evaluation on top of the procedural-memory mechanism this phase ships — not a redesign of this phase's own exit criterion after the fact.

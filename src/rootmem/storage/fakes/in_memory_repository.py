@@ -41,6 +41,7 @@ class InMemoryMemoryRepository:
             source_session_id=memory.source_session_id,
             confidence=memory.confidence,
             importance_flag=memory.importance_flag,
+            session_outcome=memory.session_outcome,
             metadata=memory.metadata,
             created_at=now,
             updated_at=now,

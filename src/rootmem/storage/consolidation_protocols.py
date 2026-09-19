@@ -34,6 +34,12 @@ class ConsolidationRun(BaseModel):
     episodes_processed: int = 0
     clusters_formed: int = 0
     facts_distilled: int = 0
+    # Phase 3 (ADR 0020): populated by the same `complete_run` call, in the
+    # same pass, as `facts_distilled` -- one run record narrates everything
+    # one "sleep cycle" did (episodic->semantic, episodic->procedural, and
+    # failure->lesson distillation together).
+    procedures_distilled: int = 0
+    lessons_distilled: int = 0
 
 
 class ConsolidationRepository(Protocol):
@@ -49,6 +55,8 @@ class ConsolidationRepository(Protocol):
         episodes_processed: int,
         clusters_formed: int,
         facts_distilled: int,
+        procedures_distilled: int = 0,
+        lessons_distilled: int = 0,
     ) -> ConsolidationRun:
         """Record a pass's completion and its outcome counts."""
         ...
