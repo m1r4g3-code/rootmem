@@ -377,7 +377,10 @@ class PostgresMemoryRepository:
         if not memory_ids:
             return
         try:
-            async with self._pool.acquire() as conn:
+            async with self._pool.acquire() as conn, conn.transaction():
+                # A read must not look like a modification: opt out of the
+                # updated_at trigger for this transaction only (migration 0008).
+                await conn.execute("SELECT set_config('rootmem.skip_updated_at', 'on', true)")
                 await conn.execute(
                     "UPDATE memories SET last_accessed_at = $2, access_count = access_count + 1 "
                     "WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL",

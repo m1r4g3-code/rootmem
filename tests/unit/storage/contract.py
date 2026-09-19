@@ -436,3 +436,18 @@ class MemoryRepositoryContract:
         await repository.record_access([], datetime(2026, 9, 1, tzinfo=UTC))
 
         assert await repository.get_by_id("ns", created.id) is None
+
+    async def test_record_access_does_not_change_updated_at(
+        self, repository: MemoryRepository
+    ) -> None:
+        from datetime import UTC, datetime
+
+        created = await repository.create(
+            NewMemory(namespace="ns", content="only ever read", source="test")
+        )
+
+        await repository.record_access([created.id], datetime(2026, 9, 1, tzinfo=UTC))
+
+        fetched = await repository.get_by_id("ns", created.id)
+        assert fetched is not None
+        assert fetched.updated_at == created.updated_at
