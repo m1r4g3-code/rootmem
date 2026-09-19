@@ -5,15 +5,17 @@
 [![CI](https://github.com/m1r4g3-code/rootmem/actions/workflows/ci.yml/badge.svg)](https://github.com/m1r4g3-code/rootmem/actions/workflows/ci.yml)
 ![Python 3.13](https://img.shields.io/badge/python-3.13-blue)
 ![mypy --strict](https://img.shields.io/badge/mypy-strict-informational)
-![Phase 0](https://img.shields.io/badge/phase-0%20%E2%80%94%20foundations-success)
+![Phase 4](https://img.shields.io/badge/phase-4%20%E2%80%94%20ranking%2C%20decay%2C%20trust%20%26%20audit-success)
 
 ROOTMEM gives an AI coding agent (Claude Code, Cursor, or anything else that
 speaks MCP) a real, persistent memory — one that survives process restarts,
 new chats, and new machines, instead of evaporating the moment a context
-window ends. This repository is **Phase 0 of a chartered, multi-phase
-build**: the minimal end-to-end slice — five MCP tools, a real Postgres
-store, a soft-delete safety model — proven to work over the actual protocol,
-not just in unit tests.
+window ends. This repository is a **chartered, multi-phase build**, now
+through Phase 4: thirteen MCP tools over a real Postgres store, with a
+semantic graph, consolidation into skills and lessons, multi-factor ranking
+with decay and trust, and a tamper-evident audit log — each phase proven over
+the actual protocol, not just in unit tests. The sections below describe the
+Phase 0 foundation the later phases build on; see Status for the full arc.
 
 ## Why this codebase is worth a second look
 
@@ -130,7 +132,13 @@ type — only the `MemoryRepository` protocol. That boundary is what makes
 `tests/integration/` a genuine end-to-end proof rather than a slower copy of
 the same unit tests.
 
-## The five tools
+## The tools
+
+The five below are the Phase 0 core. Later phases added `ingest_session`,
+`related`, `consolidate`, `feedback`, `find_skill`, `get_skill`,
+`report_skill_outcome` and `verify_audit` (13 in total); `search` now returns
+hybrid text+vector results re-ranked by relevance, decay, salience, source
+trust and graph proximity, each with a per-term score breakdown.
 
 | Tool | Contract |
 |---|---|
@@ -233,8 +241,15 @@ manual cross-session exit criterion is validated and logged. See
 full sign-off record, including the two real bugs the integration suite
 caught before they could ship.
 
-Phase 1 onward (episodic + semantic memory core, consolidation, retrieval
-ranking, trust/provenance) is scoped in the project's master charter and
-will each get their own research memo and requirements pass before
-implementation starts — per the same chained-SDLC discipline this phase
-followed.
+| Phase | Tag | Delivered |
+|---|---|---|
+| 0 | `v0.0.1-phase0` | Foundations: five tools, Postgres, soft delete |
+| 1 | `v0.1.0-phase1` | Semantic graph, vector retrieval, extraction |
+| 2 | `v0.2.0-phase2` | Consolidation, salience, Bayesian belief |
+| 3 | `v0.3.0-phase3` | Procedural memory, failure-to-lesson, SKILL.md |
+| 4 | `v0.4.0-phase4` | Ranking, decay, trust, tamper-evident audit log |
+
+Each phase has its own research memo, requirements, ADRs, exit-criterion
+test and manual sign-off log under `docs/` and `scripts/`. Ranking weights,
+decay stability and trust reliabilities are provisional defaults, not tuned
+on real usage. Cross-instance identity and remote transport are not built.

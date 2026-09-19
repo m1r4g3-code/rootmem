@@ -3,7 +3,7 @@
 Human-observed companion to `tests/integration/test_phase4_exit_criterion.py`
 (1 passed, 144.35s).
 
-**Status: PENDING (final restart item outstanding).** Automated proof passing; 7 of 8 live items done.
+**Status: PASSED (8/8).** Automated proof passing; live pass complete.
 
 ## Prerequisites
 
@@ -21,7 +21,7 @@ Human-observed companion to `tests/integration/test_phase4_exit_criterion.py`
 - [x] **Forget**: `forget` a memory; it no longer surfaces in `search`, and `psql` shows the row with `deleted_at` set.
 - [x] **Audit**: `verify_audit` returns `valid: true` with the expected entry count.
 - [x] **Tamper**: in `psql`, disable the trigger, alter one `audit_log` payload, re-enable; `verify_audit` returns `valid: false` with `first_broken_seq` at that row.
-- [ ] **Restart, then verify_audit and search again**: the chain and ranking survive a full client restart.
+- [x] **Restart, then verify_audit and search again**: the chain and ranking survive a full client restart.
 
 ## Result log
 
@@ -35,4 +35,5 @@ Human-observed companion to `tests/integration/test_phase4_exit_criterion.py`
 - **Tamper:** altered seq 4 in Postgres (trigger disabled); `verify_audit` returned `valid:false, first_broken_seq:4, reason "row_hash does not match row contents"`. Pass.
 - **Real bug found live:** a `recall` bumped `updated_at` (the shared `set_updated_at` trigger fired on the access-tracking UPDATE), so a read looked like a modification. Fixed with migration 0008 plus a transaction-local opt-out in `record_access`; contract test added.
 - **Data note:** the Phase 3 manual skills in `manual-phase3-check` were gone: the Postgres contract suites `TRUNCATE` shared tables. Skills for the live check were seeded directly.
-- **Restart, then verify_audit and search again:** _(pending, needs a client restart; also confirms the 0008 fix live.)_
+- **Restart, then verify_audit again:** after a fresh `/mcp` reconnect, `verify_audit` still reported `valid:false, first_broken_seq:4` (the tamper persists in the log). A new memory recalled twice kept `updated_at == created_at`, confirming the 0008 fix live. Pass.
+- **Process note:** restarting the Claude Code session did not respawn the rootmem server process; only an explicit `/mcp` reconnect did. Twice the live server ran pre-change code until reconnected (process start time compared against the last edit time). The `wombat` memories were also wiped by a Postgres integration test's `TRUNCATE` (shared database).

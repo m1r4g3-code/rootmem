@@ -1,6 +1,3 @@
 # trust
 
-Reserved for Phase 4: provenance/trust scoring with staleness decay,
-type-isolation, and the tamper-evident audit log. Phase 0's `forget` only
-sets `deleted_at`/`deleted_reason` (ADR 0004) — the full audit trail this
-module will build graduates from those two columns.
+Phase 4: source-reliability and skill-effectiveness scoring (`scoring.py`, ADR 0024). The tamper-evident audit log lives in `rootmem.audit` (hash chain, ADR 0025).
