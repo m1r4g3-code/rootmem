@@ -1,6 +1,6 @@
 # Phase 6 Retrospective — Hardening, Ecosystem Adapters, Quality Evidence & Packaging
 
-**Status:** Filled in after `v0.6.0-phase6`'s automated exit-criterion test (passed, 224-249s), 340 unit tests, the full integration directory (103 free tests plus every external file run one at a time, including the Phase 1-6 exit tests), and a live manual pass with a real client over HTTP (10/10) on 2026-09-19. **The container image and compose file have never been built here; only CI can verify them (see below).**
+**Status:** Filled in after `v0.6.0-phase6`'s automated exit-criterion test (passed, 224-249s), 340 unit tests, the full integration directory (103 free tests plus every external file run one at a time, including the Phase 1-6 exit tests), and a live manual pass with a real client over HTTP (10/10) on 2026-09-19. **The Dockerfile was verified only in CI (build, migrate, `/healthz`, 401s all passed); the compose file and Caddy config have never been run anywhere.**
 
 ## What shipped
 
@@ -34,7 +34,8 @@ On the small synthetic set, nDCG@5 was 0.635 lexical, 0.882 semantic, 0.975 with
 
 ## Limits worth stating
 
-- **Container packaging is unverified.** No Docker on this machine works; the CI `container` job is the only check, and it runs when this is pushed. If it fails, that is a Phase 6 defect.
+- **Container packaging is only partly verified.** No Docker on this machine works. The CI `container` job passed on the Phase 6 commit (image builds, migrations run from the image, `/healthz` ok, unauthenticated calls get 401), so the image is verified. `deploy/docker-compose.prod.yml` and the Caddyfile were never run.
+- **CI's tag-triggered real-API job has been red on every tagged release** (Phases 1-5 tags included) because the `VOYAGE_API_KEY` / `ANTHROPIC_API_KEY` repository secrets were never configured, so those tests fail in ~2 seconds. It is not a code failure, but I had not been checking tag runs, so it went unnoticed until Phase 6. The main-branch CI (lint, unit, free integration, container) is green.
 - Rate limiting is per process and resets on restart; there is no shared limiter.
 - Export/import excludes embeddings, soft-deleted memories, the audit log and superseded skill versions, and needs an empty target namespace.
 - The evaluation set is small and synthetic; its "semantic" baseline is cosine over the in-memory repository, not production hybrid.

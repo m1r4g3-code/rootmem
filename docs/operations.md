@@ -3,11 +3,14 @@
 Audience: someone deploying ROOTMEM as a shared HTTP service for one or more
 agents. For local single-user use, the stdio setup in the README is simpler.
 
-> **Verification status.** The `Dockerfile`, `deploy/docker-compose.prod.yml`
-> and `deploy/Caddyfile` were written and reviewed but **never built or run on
-> the development machine** (Docker Desktop does not work there). The CI job
-> `container` builds the image and smoke-tests `/healthz` and the 401s; that
-> is the only verification. Do a staging run before trusting production.
+> **Verification status.** Docker Desktop does not work on the development
+> machine, so nothing here was run locally. The CI job `container` builds the
+> `Dockerfile`, runs the migrations from inside the image, starts the server
+> and checks `/healthz` and the 401s; it passed on the Phase 6 commit. That
+> covers the **image only**. `deploy/docker-compose.prod.yml` and
+> `deploy/Caddyfile` (the compose wiring, the migrate-then-start ordering and
+> automatic TLS) have **never been run**. Do a staging run before trusting
+> production.
 
 ## What runs
 
