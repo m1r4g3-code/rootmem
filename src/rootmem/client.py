@@ -88,8 +88,18 @@ class RootmemClient:
     def remember(self, content: str, *, source: str, namespace: str = "default") -> dict[str, Any]:
         return self.call("remember", content=content, source=source, namespace=namespace)
 
-    def search(self, query: str, *, namespace: str = "default", limit: int = 10) -> dict[str, Any]:
-        return self.call("search", query=query, namespace=namespace, limit=limit)
+    def search(
+        self,
+        query: str,
+        *,
+        namespace: str = "default",
+        limit: int = 10,
+        mode: str | None = None,
+    ) -> dict[str, Any]:
+        args: dict[str, Any] = {"query": query, "namespace": namespace, "limit": limit}
+        if mode is not None:
+            args["mode"] = mode
+        return self.call("search", **args)
 
     def recall(self, memory_id: str, *, namespace: str = "default") -> dict[str, Any]:
         return self.call("recall", id=memory_id, namespace=namespace)

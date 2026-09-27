@@ -95,6 +95,29 @@ with `ROOTMEM_URL`, `ROOTMEM_TOKEN` and optionally `ROOTMEM_NAMESPACE` /
 `ROOTMEM_SOURCE` in the environment. The hook never blocks the session ending;
 on failure it prints to stderr and exits non-zero.
 
+### Auto-memory middleware (Phase 7)
+
+Two more hooks make retrieval and capture automatic *within* a session, not
+only at its end — see `docs/capture-hook-example.md` for the full
+`settings.json` wiring and env var table. Operationally:
+
+- Both add one HTTP round trip per prompt (`auto_recall`, read-scope) and
+  per turn (`auto_capture`, write-scope) — on an active session this is
+  meaningfully more request volume than the previous end-of-session-only
+  capture.
+- **Rate limits matter more with this on.** `RATE_LIMIT_PER_MINUTE` (default
+  600) should comfortably cover a single interactive user; size it up before
+  enabling this for several concurrent identities on one deployment.
+- **Voyage's free tier (3 requests/minute) does not gate `auto_recall`**
+  (it uses `mode="text"`, no embedding call) but **does gate `auto_capture`**
+  (`remember` embeds synchronously) — an active back-and-forth session will
+  exceed that ceiling on the free tier; writes still succeed with a null
+  embedding (existing graceful degradation), just without a vector until a
+  later `scripts/backfill_embeddings.py` sweep. A paid tier removes this.
+- Per-turn capture and the end-of-session capture will write overlapping
+  content for the same conversation, by design (ADR 0043) — this is left
+  for consolidation to merge, not deduplicated at write time.
+
 ## Rate limiting
 
 Each identity has a token bucket (`RATE_LIMIT_PER_MINUTE`, default 600;
