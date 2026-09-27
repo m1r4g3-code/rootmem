@@ -187,7 +187,7 @@ async def test_stdio_mode_is_unchanged_local_caller_owns_everything() -> None:
 async def test_tool_schemas_survive_the_guard_decorator() -> None:
     rig = _Rig(authenticated=False)
     tools = {t.name: t for t in await rig.server.list_tools()}
-    assert len(tools) == 13
+    assert len(tools) == 14  # Phase 8 added `ruminate`
     search_props = tools["search"].input_schema["properties"]
     assert {"query", "namespace", "entity_name", "entity_type", "as_of"} <= set(search_props)
     assert "id" in tools["forget"].input_schema["properties"]

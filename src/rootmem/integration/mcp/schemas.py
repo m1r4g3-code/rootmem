@@ -317,6 +317,21 @@ class ConsolidateResult(BaseModel):
     lessons_distilled: int = 0
 
 
+# --- ruminate (Phase 8, ADR 0049) ------------------------------------------------
+
+
+class RuminateParams(BaseModel):
+    namespace: str = "default"
+    force: bool = False
+
+
+class RuminateResult(BaseModel):
+    pairs_examined: int
+    pairs_resolved: int
+    pairs_skipped_too_young: int
+    pairs_skipped_ambiguous: int
+
+
 # --- feedback -------------------------------------------------------------------
 
 

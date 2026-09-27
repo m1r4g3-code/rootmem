@@ -125,6 +125,43 @@ Each identity has a token bucket (`RATE_LIMIT_PER_MINUTE`, default 600;
 resets on restart, which is correct for one node and wrong for several: do not
 scale out horizontally without adding a shared limiter.
 
+## Background rumination (Phase 8)
+
+An optional, autonomous background task that periodically reconciles
+**contested relations** — pairs where a contradiction arrived but neither
+side clearly won (`verify_audit`-visible, `metadata.contested = true`). It
+runs only in HTTP mode and is **off by default**:
+
+```
+RUMINATION_ENABLED=true
+RUMINATION_INTERVAL_MINUTES=60      # default; how often a pass runs
+RUMINATION_MIN_CONTEST_AGE_HOURS=1  # a contest younger than this is skipped
+```
+
+Each pass compares the two sides' *decay-adjusted* confidence (the same
+retention curve used for search ranking, reused here) and, if one side now
+clearly dominates, supersedes the other — in whichever chronological
+direction the evidence points, not necessarily favoring the newer side,
+though that is what happens by default once enough time passes with no new
+evidence on either side (see `docs/math-spec/phase8-math-spec.md`). Every
+resolution is a soft-supersede (never a delete) and appends one audit entry
+per namespace, attributed to the fixed actor `system:rumination` — never a
+caller identity, so it's always distinguishable from an authenticated
+action in the audit trail.
+
+The same reconciliation logic is available on demand via the `ruminate`
+tool (`ruminate(namespace, force=False)`), namespace-scoped and
+authorized like every other tool — useful for testing, or for resolving a
+contest immediately rather than waiting for the next autonomous pass.
+`force=True` bypasses the minimum-contest-age grace period.
+
+**Before turning this on**, understand what it means: the server will, on
+its own, change the *currently active* answer for some previously-unresolved
+facts, without anyone having asked it to at that moment. It never deletes
+anything and every change is audited, but it is a real behavior change from
+every earlier phase, none of which ever wrote anything without a request
+behind it.
+
 ## Backup, restore and moving data
 
 - **Full backup:** `pg_dump` the `rootmem` database (it holds memories, graph,
@@ -154,6 +191,9 @@ service first. Migrations are forward-only; take a `pg_dump` beforehand.
 | `ROOTMEM_HTTP_ALLOWED_HOSTS` | empty | hostnames served; enables Host/Origin checking |
 | `RATE_LIMIT_PER_MINUTE` / `_BURST` | `600` / `60` | per-identity limit |
 | `TRUST_SOURCE_RELIABILITY` | `{}` | JSON map of source to reliability (0-1) |
+| `RUMINATION_ENABLED` | `false` | autonomous contested-relation reconciliation (HTTP mode only) |
+| `RUMINATION_INTERVAL_MINUTES` | `60` | how often a rumination pass runs |
+| `RUMINATION_MIN_CONTEST_AGE_HOURS` | `1` | grace period before a contest is eligible |
 | `POSTGRES_*` | see `.env.example` | database connection |
 | `VOYAGE_API_KEY`, `ANTHROPIC_API_KEY` | none | external APIs |
 
@@ -172,3 +212,7 @@ service first. Migrations are forward-only; take a `pg_dump` beforehand.
 - **Ranking weights and decay are provisional defaults**; see
   `docs/benchmarks/phase6-retrieval-eval.md` for what the small evaluation set
   does and does not show.
+- **Rumination (if enabled) will change a contested relation's active side
+  on its own, eventually favoring whichever side is newer** if neither is
+  ever reinforced — a deliberate, named simplification (`docs/math-spec/
+  phase8-math-spec.md`), not a claim that "newer" is always "correct."

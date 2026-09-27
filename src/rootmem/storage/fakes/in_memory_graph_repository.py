@@ -233,6 +233,37 @@ class InMemoryGraphRepository:
         self._relations[relation_id] = updated
         return updated
 
+    async def list_contested(self, namespace: str | None) -> list[RelationRecord]:
+        return [
+            relation
+            for relation in self._relations.values()
+            if relation.is_contested
+            and relation.valid_to is None
+            and (namespace is None or relation.namespace == namespace)
+        ]
+
+    async def resolve_contest(
+        self, namespace: str, winner_id: str, loser_id: str, now: datetime
+    ) -> None:
+        winner = self._relations.get(winner_id)
+        loser = self._relations.get(loser_id)
+        if winner is None or winner.namespace != namespace:
+            raise NotFoundError(f"relation {winner_id} not found in namespace {namespace}")
+        if loser is None or loser.namespace != namespace:
+            raise NotFoundError(f"relation {loser_id} not found in namespace {namespace}")
+
+        winner_metadata = dict(winner.metadata)
+        winner_metadata["contested"] = False
+        self._relations[winner_id] = winner.model_copy(
+            update={"metadata": winner_metadata, "supersedes": loser_id}
+        )
+
+        loser_metadata = dict(loser.metadata)
+        loser_metadata["contested"] = False
+        self._relations[loser_id] = loser.model_copy(
+            update={"metadata": loser_metadata, "valid_to": now, "superseded_by": winner_id}
+        )
+
     @property
     def memory_entity_links(self) -> frozenset[tuple[str, str]]:
         """Test-only introspection — no `GraphRepository` Protocol method

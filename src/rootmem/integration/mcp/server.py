@@ -19,6 +19,7 @@ Phase 0 plan calls for, without this module reimplementing it.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import inspect
 from collections.abc import Awaitable, Callable
@@ -97,6 +98,8 @@ from rootmem.integration.mcp.schemas import (
     RememberResult,
     ReportSkillOutcomeParams,
     ReportSkillOutcomeResult,
+    RuminateParams,
+    RuminateResult,
     SearchParams,
     SearchResponse,
     UpdateParams,
@@ -116,6 +119,7 @@ from rootmem.integration.mcp.tools.remember import remember as remember_impl
 from rootmem.integration.mcp.tools.report_skill_outcome import (
     report_skill_outcome as report_skill_outcome_impl,
 )
+from rootmem.integration.mcp.tools.ruminate import ruminate as ruminate_impl
 from rootmem.integration.mcp.tools.search import search as search_impl
 from rootmem.integration.mcp.tools.update import update as update_impl
 from rootmem.integration.mcp.tools.verify_audit import verify_audit as verify_audit_impl
@@ -124,6 +128,8 @@ from rootmem.integration.routes import add_route
 from rootmem.integration.transport import build_transport_security
 from rootmem.logging import configure_logging, get_logger
 from rootmem.retrieval.rerank import RankingContext
+from rootmem.rumination.loop import run_rumination_loop
+from rootmem.rumination.run import RUMINATION_ACTOR
 from rootmem.storage.audit_protocols import AuditLogRepository
 from rootmem.storage.consolidation_protocols import ConsolidationRepository
 from rootmem.storage.graph_protocols import GraphRepository
@@ -529,6 +535,17 @@ def build_server(
 
     @server.tool()
     @guarded
+    async def ruminate(namespace: str = "default", force: bool = False) -> RuminateResult:
+        """Run one rumination pass on demand, scoped to this namespace (ADR
+        0049/0052) -- the same reconciliation logic the autonomous
+        background loop runs unattended, available here for manual use and
+        testing. `force=True` bypasses the minimum-contest-age grace period."""
+        params = _validated(RuminateParams, namespace=namespace, force=force)
+        caller_audit = AuditRecorder(audit_repository, resolve_caller().name)
+        return await ruminate_impl(graph_repository, caller_audit, settings, params)
+
+    @server.tool()
+    @guarded
     async def feedback(
         relation_id: str,
         outcome: str,
@@ -774,6 +791,9 @@ async def main_async() -> None:
     )
 
     pool = await create_pool(settings)
+    # Bound before `try` so `finally` can always reference it safely, even if
+    # setup fails before the loop itself would have been started.
+    rumination_task: asyncio.Task[None] | None = None
     try:
         repository = PostgresMemoryRepository(
             pool, settings.hybrid_search_weight_text, settings.hybrid_search_weight_vector
@@ -813,6 +833,21 @@ async def main_async() -> None:
             auth_settings,
             health_check,
         )
+
+        # Phase 8 (ADR 0049/0051): one autonomous task, HTTP mode only, off
+        # unless explicitly enabled. Cancelled cleanly on shutdown below --
+        # unlike the one-shot background_tasks inside build_server, this one
+        # never completes on its own.
+        if settings.rootmem_transport == "http" and settings.rumination_enabled:
+            rumination_audit = AuditRecorder(audit_repository, RUMINATION_ACTOR)
+            rumination_task = asyncio.create_task(
+                run_rumination_loop(graph_repository, rumination_audit, settings)
+            )
+            logger.info(
+                "rumination loop started (interval=%smin)",
+                settings.rumination_interval_minutes,
+            )
+
         if settings.rootmem_transport == "http":
             logger.info(
                 "rootmem MCP server starting (streamable HTTP on %s:%s)",
@@ -830,6 +865,10 @@ async def main_async() -> None:
             logger.info("rootmem MCP server starting (stdio transport)")
             await server.run_stdio_async()
     finally:
+        if rumination_task is not None:
+            rumination_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await rumination_task
         await pool.close()
 
 

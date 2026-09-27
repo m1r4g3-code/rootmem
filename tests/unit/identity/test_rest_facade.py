@@ -35,14 +35,14 @@ async def test_missing_malformed_and_unknown_tokens_are_401() -> None:
         assert client.get("/v1/tools").headers["www-authenticate"] == "Bearer"
 
 
-async def test_lists_all_thirteen_tools_with_schemas() -> None:
+async def test_lists_all_fourteen_tools_with_schemas() -> None:
     rig = _Rig(authenticated=True)
     agent = await rig.issue("agent", ["ns-a"])
     with _client(rig) as client:
         response = client.get("/v1/tools", headers=_auth(agent.token))
     assert response.status_code == 200
     tools = {t["name"]: t for t in response.json()}
-    assert len(tools) == 13
+    assert len(tools) == 14  # Phase 8 added `ruminate`
     assert "query" in tools["search"]["input_schema"]["properties"]
 
 

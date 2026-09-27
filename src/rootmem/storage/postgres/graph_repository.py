@@ -6,6 +6,7 @@ recursive CTEs for traversal."""
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Literal
 
 import asyncpg
@@ -458,3 +459,72 @@ class PostgresGraphRepository:
                 return _row_to_relation(updated_row)
         except asyncpg.PostgresError as exc:
             raise StorageError(f"failed to record feedback: {exc}") from exc
+
+    async def list_contested(self, namespace: str | None) -> list[RelationRecord]:
+        try:
+            async with self._pool.acquire() as conn:
+                if namespace is None:
+                    rows = await conn.fetch(
+                        f"""
+                        SELECT {_RELATION_COLUMNS} FROM relations
+                        WHERE valid_to IS NULL AND metadata->>'contested' = 'true'
+                        """
+                    )
+                else:
+                    rows = await conn.fetch(
+                        f"""
+                        SELECT {_RELATION_COLUMNS} FROM relations
+                        WHERE namespace = $1 AND valid_to IS NULL
+                          AND metadata->>'contested' = 'true'
+                        """,
+                        namespace,
+                    )
+        except asyncpg.PostgresError as exc:
+            raise StorageError(f"failed to list contested relations: {exc}") from exc
+        return [_row_to_relation(row) for row in rows]
+
+    async def resolve_contest(
+        self, namespace: str, winner_id: str, loser_id: str, now: datetime
+    ) -> None:
+        try:
+            async with self._pool.acquire() as conn, conn.transaction():
+                winner_row = await conn.fetchrow(
+                    f"SELECT {_RELATION_COLUMNS} FROM relations WHERE namespace = $1 AND id = $2 "
+                    "FOR UPDATE",
+                    namespace,
+                    winner_id,
+                )
+                if winner_row is None:
+                    raise NotFoundError(f"relation {winner_id} not found in namespace {namespace}")
+                loser_row = await conn.fetchrow(
+                    f"SELECT {_RELATION_COLUMNS} FROM relations WHERE namespace = $1 AND id = $2 "
+                    "FOR UPDATE",
+                    namespace,
+                    loser_id,
+                )
+                if loser_row is None:
+                    raise NotFoundError(f"relation {loser_id} not found in namespace {namespace}")
+
+                winner_metadata = dict(winner_row["metadata"])
+                winner_metadata["contested"] = False
+                await conn.execute(
+                    "UPDATE relations SET metadata = $2, supersedes = $3 WHERE id = $1",
+                    winner_id,
+                    winner_metadata,
+                    loser_id,
+                )
+
+                loser_metadata = dict(loser_row["metadata"])
+                loser_metadata["contested"] = False
+                await conn.execute(
+                    """
+                    UPDATE relations SET metadata = $2, valid_to = $3, superseded_by = $4
+                    WHERE id = $1
+                    """,
+                    loser_id,
+                    loser_metadata,
+                    now,
+                    winner_id,
+                )
+        except asyncpg.PostgresError as exc:
+            raise StorageError(f"failed to resolve contest: {exc}") from exc

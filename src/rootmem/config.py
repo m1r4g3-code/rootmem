@@ -142,6 +142,12 @@ class Settings(BaseSettings):
     # yet, so this names the server process, not an authenticated user.
     audit_actor: str = "rootmem-mcp"
 
+    # Phase 8 background rumination (ADR 0049-0053). Off by default (ADR
+    # 0051) -- an operator opts in explicitly. HTTP transport only.
+    rumination_enabled: bool = False
+    rumination_interval_minutes: float = Field(default=60.0, gt=0.0)
+    rumination_min_contest_age_hours: float = Field(default=1.0, ge=0.0)
+
     @property
     def distillation_model_or_default(self) -> str:
         return self.distillation_model or self.extraction_model

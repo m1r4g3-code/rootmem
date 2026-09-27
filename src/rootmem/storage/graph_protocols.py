@@ -12,6 +12,7 @@ parity.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal, Protocol
 
 from rootmem.storage.graph_models import (
@@ -132,4 +133,30 @@ class GraphRepository(Protocol):
         `relation_id`'s belief, returning the relation with its recomputed
         `confidence`. Raises `NotFoundError` if `relation_id` doesn't exist
         in this namespace."""
+        ...
+
+    async def list_contested(self, namespace: str | None) -> list[RelationRecord]:
+        """Every currently-active relation with `metadata.contested = true`.
+
+        `namespace=None` scans every namespace (Phase 8, ADR 0052) — used
+        only by the autonomous rumination loop, which has no caller-supplied
+        namespace to scope to; a specific namespace is what the explicit
+        `ruminate` tool passes, going through the same authorization every
+        other tool does. Pairs share `(namespace, subject_entity_id,
+        predicate)`; reconstructing pairs from the flat list is the caller's
+        job (`rumination.run`), not this method's."""
+        ...
+
+    async def resolve_contest(
+        self, namespace: str, winner_id: str, loser_id: str, now: datetime
+    ) -> None:
+        """Reconcile one contested pair (Phase 8, ADR 0049/0050):
+        `winner_id`'s `metadata.contested` is cleared and `supersedes` is set
+        to `loser_id`; `loser_id` is soft-superseded (`valid_to=now`,
+        `superseded_by=winner_id`, `metadata.contested` cleared) — never
+        deleted, per ADR 0004's discipline extended to the graph. Which side
+        is chronologically older is irrelevant to which wins; that decision
+        is made by the caller (`rumination.reconcile.decide_reconciliation`),
+        not here. Raises `NotFoundError` if either id doesn't exist in
+        `namespace`."""
         ...

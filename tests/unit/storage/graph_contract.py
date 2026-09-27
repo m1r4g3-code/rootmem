@@ -11,10 +11,12 @@ pytest doesn't try to collect it directly.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from rootmem.storage.graph_models import NewEntity, NewRelation
-from rootmem.storage.graph_protocols import GraphRepository
+from rootmem.storage.graph_protocols import GraphRepository, NotFoundError
 
 
 class GraphRepositoryContract:
@@ -185,6 +187,116 @@ class GraphRepositoryContract:
         assert second.previous.id == first.new.id
         assert second.previous.is_contested
         assert second.previous.is_active  # not superseded — both remain active
+
+    async def _seed_contested_pair(
+        self, repository: GraphRepository, namespace: str
+    ) -> tuple[str, str]:
+        """Returns (older_id, newer_id) of a genuine contested pair, for the
+        Phase 8 rumination contract tests below."""
+        alice = await repository.upsert_entity(
+            NewEntity(namespace=namespace, entity_type="Person", name="Alice")
+        )
+        acme = await repository.upsert_entity(
+            NewEntity(namespace=namespace, entity_type="Organization", name="Acme")
+        )
+        globex = await repository.upsert_entity(
+            NewEntity(namespace=namespace, entity_type="Organization", name="Globex")
+        )
+        first = await repository.create_relation(
+            NewRelation(
+                namespace=namespace,
+                subject_entity_id=alice.id,
+                predicate="works_at",
+                object_entity_id=acme.id,
+                confidence=1.0,
+            )
+        )
+        second = await repository.create_relation(
+            NewRelation(
+                namespace=namespace,
+                subject_entity_id=alice.id,
+                predicate="works_at",
+                object_entity_id=globex.id,
+                confidence=0.1,
+            )
+        )
+        assert second.contested is True
+        return first.new.id, second.new.id
+
+    async def test_list_contested_scoped_to_namespace(self, repository: GraphRepository) -> None:
+        older_a, newer_a = await self._seed_contested_pair(repository, "ns-a")
+        older_b, newer_b = await self._seed_contested_pair(repository, "ns-b")
+
+        scoped = await repository.list_contested("ns-a")
+        assert {r.id for r in scoped} == {older_a, newer_a}
+
+        everywhere = await repository.list_contested(None)
+        assert {r.id for r in everywhere} == {older_a, newer_a, older_b, newer_b}
+
+    async def test_list_contested_excludes_uncontested_relations(
+        self, repository: GraphRepository
+    ) -> None:
+        alice = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Person", name="Alice")
+        )
+        acme = await repository.upsert_entity(
+            NewEntity(namespace="ns", entity_type="Organization", name="Acme")
+        )
+        await repository.create_relation(
+            NewRelation(
+                namespace="ns",
+                subject_entity_id=alice.id,
+                predicate="works_at",
+                object_entity_id=acme.id,
+            )
+        )
+        assert await repository.list_contested("ns") == []
+
+    async def test_resolve_contest_supersedes_loser_and_clears_contested(
+        self, repository: GraphRepository
+    ) -> None:
+        older_id, newer_id = await self._seed_contested_pair(repository, "ns")
+        now = datetime.now(UTC)
+
+        await repository.resolve_contest("ns", winner_id=newer_id, loser_id=older_id, now=now)
+
+        winner = await repository.get_relation_by_id("ns", newer_id)
+        loser = await repository.get_relation_by_id("ns", older_id)
+        assert winner is not None and loser is not None
+        assert winner.is_contested is False
+        assert winner.supersedes == older_id
+        assert winner.is_active
+        assert loser.is_contested is False
+        assert loser.superseded_by == newer_id
+        assert loser.valid_to == now
+        assert await repository.list_contested("ns") == []
+
+    async def test_resolve_contest_can_favor_the_older_side(
+        self, repository: GraphRepository
+    ) -> None:
+        """Bi-temporally legitimate (ADR 0049/0050): the chronologically
+        older relation can win, retroactively superseding the newer one."""
+        older_id, newer_id = await self._seed_contested_pair(repository, "ns")
+        now = datetime.now(UTC)
+
+        await repository.resolve_contest("ns", winner_id=older_id, loser_id=newer_id, now=now)
+
+        winner = await repository.get_relation_by_id("ns", older_id)
+        loser = await repository.get_relation_by_id("ns", newer_id)
+        assert winner is not None and loser is not None
+        assert winner.is_active and winner.supersedes == newer_id
+        assert loser.superseded_by == older_id and loser.valid_to == now
+
+    async def test_resolve_contest_missing_relation_raises_not_found(
+        self, repository: GraphRepository
+    ) -> None:
+        older_id, newer_id = await self._seed_contested_pair(repository, "ns")
+        now = datetime.now(UTC)
+        missing_id = "00000000-0000-0000-0000-000000000000"
+        with pytest.raises(NotFoundError):
+            await repository.resolve_contest("ns", winner_id=newer_id, loser_id=missing_id, now=now)
+        with pytest.raises(NotFoundError):
+            await repository.resolve_contest("ns", winner_id=missing_id, loser_id=older_id, now=now)
 
     async def test_related_returns_relations_touching_entity(
         self, repository: GraphRepository

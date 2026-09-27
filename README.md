@@ -5,21 +5,22 @@
 [![CI](https://github.com/m1r4g3-code/rootmem/actions/workflows/ci.yml/badge.svg)](https://github.com/m1r4g3-code/rootmem/actions/workflows/ci.yml)
 ![Python 3.13](https://img.shields.io/badge/python-3.13-blue)
 ![mypy --strict](https://img.shields.io/badge/mypy-strict-informational)
-![Phase 7](https://img.shields.io/badge/phase-7%20%E2%80%94%20auto--memory%20middleware-success)
+![Phase 8](https://img.shields.io/badge/phase-8%20%E2%80%94%20background%20rumination-success)
 
 ROOTMEM gives an AI coding agent (Claude Code, Cursor, or anything else that
 speaks MCP) a real, persistent memory — one that survives process restarts,
 new chats, and new machines, instead of evaporating the moment a context
 window ends. This repository is a **chartered, multi-phase build**, now
-through Phase 7: thirteen MCP tools over a real Postgres store, with a
+through Phase 8: fourteen MCP tools over a real Postgres store, with a
 semantic graph, consolidation into skills and lessons, multi-factor ranking
 with decay and trust, a tamper-evident audit log, an optional authenticated HTTP transport with
 per-agent identities, scopes, rate limits, a REST facade, namespace
-export/import, a container recipe, and — new in Phase 7 — automatic,
-invisible memory use within a Claude Code session (recall before a response,
-capture after a turn, no explicit tool call needed) — each phase proven over
-the actual protocol, not just in unit tests. The sections below describe the
-Phase 0 foundation the later phases build on; see Status for the full arc.
+export/import, a container recipe, automatic recall/capture within a Claude
+Code session (Phase 7), and — new in Phase 8 — an optional autonomous
+background process that periodically reconciles contested facts on its own
+schedule, with nobody calling anything — each phase proven over the actual
+protocol, not just in unit tests. The sections below describe the Phase 0
+foundation the later phases build on; see Status for the full arc.
 
 ## Why this codebase is worth a second look
 
@@ -255,6 +256,7 @@ caught before they could ship.
 | 5 | `v0.5.0-phase5` | Streamable-HTTP transport, agent identities and namespace authorization, separate test database |
 | 6 | `v0.6.0-phase6` | Token expiry/rotation, read scope, rate limiting, `/healthz`, REST facade + Python client, namespace export/import, Claude Code API hook, offline retrieval evaluation, Docker packaging |
 | 7 | `v0.7.0-phase7` | Auto-memory middleware: automatic recall before a prompt and capture after a turn via Claude Code hooks, no new server capability |
+| 8 | `v0.8.0-phase8` | Background rumination: an optional autonomous loop that reconciles contested relations via decay-adjusted belief comparison, with no request behind it |
 
 Each phase has its own research memo, requirements, ADRs, exit-criterion
 test and manual sign-off log under `docs/` and `scripts/`. Ranking weights,
@@ -276,4 +278,9 @@ dogfooding pass found and fixed three real bugs before sign-off, including
 one where auto-recall silently did nothing on every real prompt because it
 read the wrong stdin field name (ADR 0048) — a "confirmation" obtained by
 manually reproducing the search call had masked it; see
-`docs/retro/phase7-retro.md` for the full account.
+`docs/retro/phase7-retro.md` for the full account. Phase 8's rumination is
+**off by default** (`RUMINATION_ENABLED=false`) — an operator opts in
+explicitly; it runs only in HTTP mode and, left unattended, eventually
+resolves a stale contest in favor of whichever side is newer (see
+`docs/math-spec/phase8-math-spec.md`), which is a stated simplification,
+not a claim that newer is always correct.
